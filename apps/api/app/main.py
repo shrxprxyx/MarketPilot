@@ -5,7 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import health, ready
+from app.api.v1 import (
+    auth,  # add this import
+    health,
+    ready,
+)
 from app.config import settings
 from app.core.errors import unhandled_exception_handler
 from app.core.logging import configure_logging
@@ -37,3 +41,4 @@ app.add_exception_handler(Exception, unhandled_exception_handler)  # type: ignor
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(ready.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
