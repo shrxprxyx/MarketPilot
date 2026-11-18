@@ -1,10 +1,10 @@
-﻿import hashlib
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,13 @@ from app.auth.jwt import (
     refresh_token_expiry,
 )
 from app.auth.password import hash_password, verify_password
+from app.auth.rate_limit import (
+    clear_login_attempts,
+    enforce_login_rate_limit,
+    record_login_failure,
+)
 from app.core.errors import ProblemException
+from app.db.rls import set_rls_context
 from app.db.session import get_db
 from app.models.membership import Membership
 from app.models.refresh_token import RefreshToken
@@ -26,10 +32,14 @@ logger = logging.getLogger(__name__)
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 
+# First member of a freshly registered tenant. Matches the SRS role vocabulary
+# (admin | manager | member); "admin" has full control of the tenant.
+OWNER_ROLE = "admin"
+
 
 class RegisterIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=10)
     tenant_name: str
 
 
@@ -48,6 +58,10 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @router.post("/register", response_model=TokenOut, status_code=201)
 async def register(body: RegisterIn, db: DB) -> TokenOut:
     existing = await db.scalar(select(User).where(User.email == body.email))
@@ -62,7 +76,12 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
 
     await db.flush()
 
-    membership = Membership(user_id=user.id, tenant_id=tenant.id, role="owner")
+    # Both sides of the bridge row are known now, so set RLS context before the
+    # membership insert — memberships is FORCE RLS and needs a matching tenant_id
+    # or user_id to satisfy its WITH CHECK clause.
+    await set_rls_context(db, tenant_id=tenant.id, user_id=user.id)
+
+    membership = Membership(user_id=user.id, tenant_id=tenant.id, role=OWNER_ROLE)
     db.add(membership)
 
     raw = make_refresh_token()
@@ -74,21 +93,31 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
     db.add(rt)
     await db.commit()
 
-    access = create_access_token(user.id, tenant.id, "owner")
+    access = create_access_token(user.id, tenant.id, OWNER_ROLE)
     return TokenOut(access_token=access, refresh_token=raw)
 
 
 @router.post("/login", response_model=TokenOut)
-async def login(body: LoginIn, db: DB) -> TokenOut:
+async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
+    ip = _client_ip(request)
+    await enforce_login_rate_limit(body.email, ip)
+
     user = await db.scalar(select(User).where(User.email == body.email))
     if not user or not verify_password(body.password, user.hashed_password):
+        await record_login_failure(body.email, ip)
         raise ProblemException(401, "Unauthorized", "Invalid credentials.")
+
+    # We know the user but not yet which tenant to act as — memberships' policy
+    # lets a row through on user_id alone so this lookup can resolve that.
+    await set_rls_context(db, user_id=user.id)
 
     membership = await db.scalar(
         select(Membership).where(Membership.user_id == user.id)
     )
     if not membership:
         raise ProblemException(403, "Forbidden", "No tenant membership found.")
+
+    await clear_login_attempts(body.email, ip)
 
     raw = make_refresh_token()
     rt = RefreshToken(
@@ -119,6 +148,8 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
         expires_at=refresh_token_expiry(),
     )
     db.add(new_rt)
+
+    await set_rls_context(db, user_id=rt.user_id)
 
     membership = await db.scalar(
         select(Membership).where(Membership.user_id == rt.user_id)

@@ -2,12 +2,11 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from redis import asyncio as aioredis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.core.errors import problem
+from app.core.redis import get_redis
 from app.db.session import get_db
 
 router = APIRouter(tags=["platform"])
@@ -27,9 +26,7 @@ async def ready(db: DB) -> dict[str, str]:
 
     # check Redis
     try:
-        r = aioredis.from_url(settings.redis_url)
-        await r.ping()
-        await r.aclose()
+        await get_redis().ping()
     except Exception as exc:
         logger.warning("Redis not ready: %s", exc)
         return problem(503, "Service Unavailable", "Redis is not reachable.")  # type: ignore[return-value]

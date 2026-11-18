@@ -1,13 +1,14 @@
-﻿from typing import Annotated
+﻿from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Header
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import decode_access_token
 from app.core.errors import ProblemException
+from app.db.rls import set_rls_context
 from app.db.session import get_db
 from app.models.membership import Membership
 from app.models.user import User
@@ -37,6 +38,9 @@ async def get_current_user(
     tenant_id = UUID(payload["tenant_id"])
     role = payload.get("role", "member")
 
+    # Set RLS context before any tenant-scoped query runs on this session.
+    await set_rls_context(db, tenant_id=tenant_id, user_id=user_id)
+
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise ProblemException(401, "Unauthorized", "User not found.")
@@ -54,7 +58,7 @@ async def get_current_user(
     return CurrentUser(user=user, tenant_id=tenant_id, role=role)
 
 
-def require_role(*roles: str):
+def require_role(*roles: str) -> Any:
     """Dependency factory: require the current user to have one of the given roles."""
     async def _check(
         current: Annotated[CurrentUser, Depends(get_current_user)],

@@ -10,10 +10,11 @@ class Settings(BaseSettings):
     redis_url: str
     jwt_secret: str
     allowed_origins: str = "http://localhost:3000"
+    app_user_db_password: str = "app_user_dev_password"
 
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
 
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

@@ -3,7 +3,6 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
@@ -40,5 +39,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return problem(500, "Internal Server Error", "An unexpected error occurred.")
 
 
-async def problem_exception_handler(request: Request, exc: ProblemException) -> JSONResponse:
+async def problem_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, ProblemException)
     return problem(exc.status, exc.title, exc.detail, **exc.extra)

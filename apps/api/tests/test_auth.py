@@ -1,6 +1,6 @@
-import pytest
 from fastapi.testclient import TestClient
 
+from app.auth.rate_limit import clear_login_attempts
 from app.main import app
 
 client = TestClient(app)
@@ -8,6 +8,15 @@ client = TestClient(app)
 _EMAIL = "auto@example.com"
 _PASSWORD = "password123"
 _TENANT = "Auto Corp"
+
+
+def test_register_rejects_short_password() -> None:
+    r = client.post("/api/v1/auth/register", json={
+        "email": "shortpw@example.com",
+        "password": "abc123",  # under the 10-char minimum (FR-AUTH-03)
+        "tenant_name": "Short PW Co",
+    })
+    assert r.status_code == 422
 
 
 def test_register() -> None:
@@ -91,3 +100,18 @@ def test_refresh_after_logout() -> None:
     client.post("/api/v1/auth/logout", json={"refresh_token": rt})
     r = client.post("/api/v1/auth/refresh", json={"refresh_token": rt})
     assert r.status_code == 401
+
+
+async def test_login_locks_out_after_five_failures() -> None:
+    """FR-AUTH-03: 5 failed attempts per minute per IP+email triggers a lockout."""
+    email = "lockout@example.com"
+    await clear_login_attempts(email, "testclient")  # isolate from other test runs
+
+    for _ in range(5):
+        r = client.post("/api/v1/auth/login", json={"email": email, "password": "wrong-password"})
+        assert r.status_code == 401
+
+    r = client.post("/api/v1/auth/login", json={"email": email, "password": "wrong-password"})
+    assert r.status_code == 429
+
+    await clear_login_attempts(email, "testclient")
