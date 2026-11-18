@@ -2,12 +2,14 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import CurrentUser, get_current_user
 from app.auth.jwt import (
     create_access_token,
     make_refresh_token,
@@ -67,6 +69,10 @@ class AcceptInviteIn(BaseModel):
     password: str = Field(min_length=10)
 
 
+class SwitchTenantIn(BaseModel):
+    tenant_id: UUID
+
+
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -96,6 +102,7 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
     raw = make_refresh_token()
     rt = RefreshToken(
         user_id=user.id,
+        tenant_id=tenant.id,
         token_hash=hashlib.sha256(raw.encode()).hexdigest(),
         expires_at=refresh_token_expiry(),
     )
@@ -117,13 +124,16 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
         raise ProblemException(401, "Unauthorized", "Invalid credentials.")
 
     # We know the user but not yet which tenant to act as — memberships' policy
-    # lets a row through on user_id alone so this lookup can resolve that.
+    # lets a row through on user_id alone so this lookup can resolve that. A user
+    # can belong to several tenants (FR-AUTH-05), so login picks the oldest active
+    # one as a deterministic default; switch-tenant moves to any other afterward.
     await set_rls_context(db, user_id=user.id)
 
     membership = await db.scalar(
-        select(Membership).where(
-            Membership.user_id == user.id, Membership.status == "active"
-        )
+        select(Membership)
+        .where(Membership.user_id == user.id, Membership.status == "active")
+        .order_by(Membership.created_at.asc())
+        .limit(1)
     )
     if not membership:
         raise ProblemException(403, "Forbidden", "No active tenant membership found.")
@@ -133,6 +143,7 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     raw = make_refresh_token()
     rt = RefreshToken(
         user_id=user.id,
+        tenant_id=membership.tenant_id,
         token_hash=hashlib.sha256(raw.encode()).hexdigest(),
         expires_at=refresh_token_expiry(),
     )
@@ -151,27 +162,68 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
     if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
         raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
 
+    tenant_id = rt.tenant_id
     rt.revoked = True
     raw = make_refresh_token()
     new_rt = RefreshToken(
         user_id=rt.user_id,
+        tenant_id=tenant_id,
         token_hash=hashlib.sha256(raw.encode()).hexdigest(),
         expires_at=refresh_token_expiry(),
     )
     db.add(new_rt)
 
-    await set_rls_context(db, user_id=rt.user_id)
+    # Resume the exact tenant this token was issued for — no re-resolution, so
+    # this stays correct for users with several active memberships.
+    await set_rls_context(db, tenant_id=tenant_id, user_id=rt.user_id)
 
     membership = await db.scalar(
         select(Membership).where(
-            Membership.user_id == rt.user_id, Membership.status == "active"
+            Membership.user_id == rt.user_id,
+            Membership.tenant_id == tenant_id,
+            Membership.status == "active",
         )
     )
     if not membership:
         raise ProblemException(403, "Forbidden", "No active tenant membership found.")
 
     await db.commit()
-    access = create_access_token(rt.user_id, membership.tenant_id, membership.role)
+    access = create_access_token(rt.user_id, tenant_id, membership.role)
+    return TokenOut(access_token=access, refresh_token=raw)
+
+
+@router.post("/switch-tenant", response_model=TokenOut)
+async def switch_tenant(
+    body: SwitchTenantIn,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: DB,
+) -> TokenOut:
+    """FR-AUTH-05: re-issue a token pair scoped to a different tenant the caller
+    is an active member of. `get_current_user` already set app.user_id, so the
+    membership policy's user_id branch lets this find any of the caller's rows
+    regardless of which tenant_id is being switched to.
+    """
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.user_id == current.user.id,
+            Membership.tenant_id == body.tenant_id,
+            Membership.status == "active",
+        )
+    )
+    if not membership:
+        raise ProblemException(403, "Forbidden", "Not an active member of that tenant.")
+
+    raw = make_refresh_token()
+    rt = RefreshToken(
+        user_id=current.user.id,
+        tenant_id=body.tenant_id,
+        token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+        expires_at=refresh_token_expiry(),
+    )
+    db.add(rt)
+    await db.commit()
+
+    access = create_access_token(current.user.id, body.tenant_id, membership.role)
     return TokenOut(access_token=access, refresh_token=raw)
 
 
@@ -215,6 +267,7 @@ async def accept_invite(body: AcceptInviteIn, db: DB) -> TokenOut:
     raw = make_refresh_token()
     rt = RefreshToken(
         user_id=user.id,
+        tenant_id=tenant_id,
         token_hash=hashlib.sha256(raw.encode()).hexdigest(),
         expires_at=refresh_token_expiry(),
     )
