@@ -1,23 +1,26 @@
 import logging
+from typing import Annotated
 
-import asyncpg
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from redis import asyncio as aioredis
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.errors import problem
+from app.db.session import get_db
 
 router = APIRouter(tags=["platform"])
 logger = logging.getLogger(__name__)
 
+DB = Annotated[AsyncSession, Depends(get_db)]
+
 
 @router.get("/ready")
-async def ready() -> dict[str, str]:
+async def ready(db: DB) -> dict[str, str]:
     # check Postgres
     try:
-        conn = await asyncpg.connect(settings.database_url.replace("+asyncpg", ""))
-        await conn.execute("SELECT 1")
-        await conn.close()
+        await db.execute(text("SELECT 1"))
     except Exception as exc:
         logger.warning("Postgres not ready: %s", exc)
         return problem(503, "Service Unavailable", "Postgres is not reachable.")  # type: ignore[return-value]
