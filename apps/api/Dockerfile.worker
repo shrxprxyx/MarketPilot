@@ -1,0 +1,9 @@
+FROM ghcr.io/astral-sh/uv:python3.10-bookworm-slim
+WORKDIR /app
+ENV UV_PROJECT_ENVIRONMENT=/venv \
+    UV_LINK_MODE=copy \
+    PYTHONUNBUFFERED=1
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY app ./app
+CMD ["/venv/bin/celery", "-A", "app.jobs.celery_app", "worker", "--loglevel=info", "--pool=solo"]
