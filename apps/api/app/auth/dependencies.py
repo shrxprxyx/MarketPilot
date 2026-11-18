@@ -36,7 +36,6 @@ async def get_current_user(
 
     user_id = UUID(payload["sub"])
     tenant_id = UUID(payload["tenant_id"])
-    role = payload.get("role", "member")
 
     # Set RLS context before any tenant-scoped query runs on this session.
     await set_rls_context(db, tenant_id=tenant_id, user_id=user_id)
@@ -45,7 +44,10 @@ async def get_current_user(
     if not user:
         raise ProblemException(401, "Unauthorized", "User not found.")
 
-    # Verify membership still exists (not removed since token was issued)
+    # Verify membership still exists (not removed since token was issued), and
+    # re-read role/status from the row rather than trusting the JWT's claims —
+    # a role change or deactivation (FR-TEN-01) must take effect on the very next
+    # request, not wait for the access token to expire.
     membership = await db.scalar(
         select(Membership).where(
             Membership.user_id == user_id,
@@ -54,8 +56,10 @@ async def get_current_user(
     )
     if not membership:
         raise ProblemException(403, "Forbidden", "Not a member of this tenant.")
+    if membership.status != "active":
+        raise ProblemException(403, "Forbidden", "Membership is deactivated.")
 
-    return CurrentUser(user=user, tenant_id=tenant_id, role=role)
+    return CurrentUser(user=user, tenant_id=tenant_id, role=membership.role)
 
 
 def require_role(*roles: str) -> Any:

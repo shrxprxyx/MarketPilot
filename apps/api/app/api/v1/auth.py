@@ -112,10 +112,12 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     await set_rls_context(db, user_id=user.id)
 
     membership = await db.scalar(
-        select(Membership).where(Membership.user_id == user.id)
+        select(Membership).where(
+            Membership.user_id == user.id, Membership.status == "active"
+        )
     )
     if not membership:
-        raise ProblemException(403, "Forbidden", "No tenant membership found.")
+        raise ProblemException(403, "Forbidden", "No active tenant membership found.")
 
     await clear_login_attempts(body.email, ip)
 
@@ -152,10 +154,12 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
     await set_rls_context(db, user_id=rt.user_id)
 
     membership = await db.scalar(
-        select(Membership).where(Membership.user_id == rt.user_id)
+        select(Membership).where(
+            Membership.user_id == rt.user_id, Membership.status == "active"
+        )
     )
     if not membership:
-        raise ProblemException(403, "Forbidden", "No tenant membership found.")
+        raise ProblemException(403, "Forbidden", "No active tenant membership found.")
 
     await db.commit()
     access = create_access_token(rt.user_id, membership.tenant_id, membership.role)

@@ -24,6 +24,7 @@ class Membership(UUIDMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
     )
     role: Mapped[str] = mapped_column(String(32), server_default="member", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="active", nullable=False)
 
     user: Mapped[User] = relationship(back_populates="memberships")
     tenant: Mapped[Tenant] = relationship(back_populates="members")
