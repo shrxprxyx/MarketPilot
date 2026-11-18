@@ -8,17 +8,25 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ProblemException
 from app.auth.jwt import (
     create_access_token,
     make_refresh_token,
     refresh_token_expiry,
 )
+from app.core.errors import ProblemException
 from app.auth.password import hash_password, verify_password
-from app.core.errors import problem
+from app.core.errors import ProblemException
+from app.core.errors import ProblemException, problem
+from app.core.errors import ProblemException
 from app.db.session import get_db
+from app.core.errors import ProblemException
 from app.models.membership import Membership
+from app.core.errors import ProblemException
 from app.models.refresh_token import RefreshToken
+from app.core.errors import ProblemException
 from app.models.tenant import Tenant
+from app.core.errors import ProblemException
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -52,7 +60,7 @@ class RefreshIn(BaseModel):
 async def register(body: RegisterIn, db: DB) -> TokenOut:
     existing = await db.scalar(select(User).where(User.email == body.email))
     if existing:
-        raise problem(409, "Conflict", "Email already registered.")  # type: ignore[misc]
+        raise ProblemException(409, "Conflict", "Email already registered.")  # type: ignore[misc]
 
     user = User(email=body.email, hashed_password=hash_password(body.password))
     db.add(user)
@@ -82,13 +90,13 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
 async def login(body: LoginIn, db: DB) -> TokenOut:
     user = await db.scalar(select(User).where(User.email == body.email))
     if not user or not verify_password(body.password, user.hashed_password):
-        raise problem(401, "Unauthorized", "Invalid credentials.")  # type: ignore[misc]
+        raise ProblemException(401, "Unauthorized", "Invalid credentials.")  # type: ignore[misc]
 
     membership = await db.scalar(
         select(Membership).where(Membership.user_id == user.id)
     )
     if not membership:
-        raise problem(403, "Forbidden", "No tenant membership found.")  # type: ignore[misc]
+        raise ProblemException(403, "Forbidden", "No tenant membership found.")  # type: ignore[misc]
 
     raw = make_refresh_token()
     rt = RefreshToken(
@@ -109,7 +117,7 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
     rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
 
     if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
-        raise problem(401, "Unauthorized", "Invalid or expired refresh token.")  # type: ignore[misc]
+        raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")  # type: ignore[misc]
 
     # rotate: revoke old, issue new
     rt.revoked = True
@@ -125,7 +133,7 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
         select(Membership).where(Membership.user_id == rt.user_id)
     )
     if not membership:
-        raise problem(403, "Forbidden", "No tenant membership found.")  # type: ignore[misc]
+        raise ProblemException(403, "Forbidden", "No tenant membership found.")  # type: ignore[misc]
 
     await db.commit()
     access = create_access_token(rt.user_id, membership.tenant_id, membership.role)

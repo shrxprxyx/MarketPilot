@@ -11,7 +11,7 @@ from app.api.v1 import (
     ready,
 )
 from app.config import settings
-from app.core.errors import unhandled_exception_handler
+from app.core.errors import ProblemException, problem_exception_handler, unhandled_exception_handler
 from app.core.logging import configure_logging
 from app.core.middleware import RequestIDMiddleware
 
@@ -37,6 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_exception_handler(ProblemException, problem_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)  # type: ignore[arg-type]
 
 app.include_router(health.router, prefix="/api/v1")

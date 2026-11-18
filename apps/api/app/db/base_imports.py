@@ -1,0 +1,11 @@
+﻿# app/db/base_imports.py
+# This file exists solely to import all ORM models so that
+# Base.metadata is populated before Alembic autogenerate runs.
+
+from app.db.base import Base  # noqa: F401
+
+from app.models.user import User  # noqa: F401
+from app.models.tenant import Tenant  # noqa: F401
+from app.models.refresh_token import RefreshToken  # noqa: F401
+
+from app.models.membership import Membership  # noqa: F401
