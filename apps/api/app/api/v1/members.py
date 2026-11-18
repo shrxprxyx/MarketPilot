@@ -3,14 +3,16 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.auth.jwt import invite_token_expiry, make_invite_token
+from app.core.audit import log_audit
 from app.core.errors import ProblemException
+from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.invite import Invite
 from app.models.membership import Membership
@@ -126,6 +128,7 @@ async def list_members(
 async def update_member(
     membership_id: UUID,
     body: MemberPatch,
+    request: Request,
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
 ) -> MemberOut:
@@ -140,10 +143,25 @@ async def update_member(
             409, "Conflict", "The last admin of a tenant cannot be demoted or deactivated."
         )
 
-    if body.role is not None:
+    changes: dict[str, str] = {}
+    if body.role is not None and body.role != membership.role:
+        changes["role_from"], changes["role_to"] = membership.role, body.role
         membership.role = body.role
-    if body.status is not None:
+    if body.status is not None and body.status != membership.status:
+        changes["status_from"], changes["status_to"] = membership.status, body.status
         membership.status = body.status
+
+    if changes:
+        log_audit(
+            db,
+            tenant_id=current.tenant_id,
+            actor_id=current.user.id,
+            action="member.updated",
+            entity="membership",
+            entity_id=membership.id,
+            meta=changes,
+            ip=client_ip(request),
+        )
     await db.commit()
 
     email = await db.scalar(select(User.email).where(User.id == membership.user_id))
@@ -160,6 +178,7 @@ async def update_member(
 @router.delete("/{membership_id}", status_code=204)
 async def remove_member(
     membership_id: UUID,
+    request: Request,
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
 ) -> None:
@@ -167,6 +186,16 @@ async def remove_member(
     if await _is_last_active_admin(db, current.tenant_id, membership):
         raise ProblemException(409, "Conflict", "The last admin of a tenant cannot be removed.")
 
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="member.removed",
+        entity="membership",
+        entity_id=membership.id,
+        meta={"removed_user_id": str(membership.user_id), "role": membership.role},
+        ip=client_ip(request),
+    )
     await db.delete(membership)
     await db.commit()
 
@@ -174,6 +203,7 @@ async def remove_member(
 @router.post("/invite", response_model=InviteOut, status_code=201)
 async def create_invite(
     body: InviteIn,
+    request: Request,
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
 ) -> InviteOut:
@@ -200,6 +230,17 @@ async def create_invite(
         expires_at=invite_token_expiry(),
     )
     db.add(invite)
+
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="invite.created",
+        entity="invite",
+        entity_id=invite.id,
+        meta={"email": invite.email, "role": invite.role},
+        ip=client_ip(request),
+    )
     await db.commit()
 
     return InviteOut(
@@ -229,6 +270,7 @@ async def list_invites(
 @router.delete("/invites/{invite_id}", status_code=204)
 async def revoke_invite(
     invite_id: UUID,
+    request: Request,
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
 ) -> None:
@@ -237,5 +279,16 @@ async def revoke_invite(
     )
     if not invite:
         raise ProblemException(404, "Not Found", "Invite not found.")
+
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="invite.revoked",
+        entity="invite",
+        entity_id=invite.id,
+        meta={"email": invite.email},
+        ip=client_ip(request),
+    )
     await db.delete(invite)
     await db.commit()

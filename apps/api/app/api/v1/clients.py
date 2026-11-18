@@ -1,14 +1,16 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
+from app.core.audit import log_audit
 from app.core.errors import ProblemException
 from app.core.pagination import decode_cursor, encode_cursor
+from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.brand_profile import BrandProfile
 from app.models.client import Client
@@ -156,6 +158,7 @@ async def update_client(
 @router.delete("/{client_id}", status_code=204)
 async def archive_client(
     client_id: UUID,
+    request: Request,
     current: Annotated[CurrentUser, WRITER],
     db: DB,
 ) -> None:
@@ -163,6 +166,17 @@ async def archive_client(
     history (FR-AUD-08) and anything already linked to it must survive."""
     client = await _get_client_or_404(db, current, client_id)
     client.status = "archived"
+
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="client.archived",
+        entity="client",
+        entity_id=client.id,
+        meta={"name": client.name},
+        ip=client_ip(request),
+    )
     await db.commit()
 
 

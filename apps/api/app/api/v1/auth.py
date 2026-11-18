@@ -21,7 +21,9 @@ from app.auth.rate_limit import (
     enforce_login_rate_limit,
     record_login_failure,
 )
+from app.core.audit import log_audit
 from app.core.errors import ProblemException
+from app.core.request import client_ip
 from app.db.rls import set_rls_context
 from app.db.session import get_db
 from app.models.invite import Invite
@@ -73,12 +75,8 @@ class SwitchTenantIn(BaseModel):
     tenant_id: UUID
 
 
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
 @router.post("/register", response_model=TokenOut, status_code=201)
-async def register(body: RegisterIn, db: DB) -> TokenOut:
+async def register(body: RegisterIn, request: Request, db: DB) -> TokenOut:
     existing = await db.scalar(select(User).where(User.email == body.email))
     if existing:
         raise ProblemException(409, "Conflict", "Email already registered.")
@@ -107,6 +105,17 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
         expires_at=refresh_token_expiry(),
     )
     db.add(rt)
+
+    log_audit(
+        db,
+        tenant_id=tenant.id,
+        actor_id=user.id,
+        action="register",
+        entity="tenant",
+        entity_id=tenant.id,
+        meta={"email": user.email},
+        ip=client_ip(request),
+    )
     await db.commit()
 
     access = create_access_token(user.id, tenant.id, OWNER_ROLE)
@@ -115,7 +124,7 @@ async def register(body: RegisterIn, db: DB) -> TokenOut:
 
 @router.post("/login", response_model=TokenOut)
 async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
-    ip = _client_ip(request)
+    ip = client_ip(request)
     await enforce_login_rate_limit(body.email, ip)
 
     user = await db.scalar(select(User).where(User.email == body.email))
@@ -148,6 +157,19 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
         expires_at=refresh_token_expiry(),
     )
     db.add(rt)
+
+    # Only app.user_id was set above (tenant wasn't chosen yet) — audit_log's
+    # INSERT policy needs app.tenant_id too, now that we know which one.
+    await set_rls_context(db, tenant_id=membership.tenant_id)
+    log_audit(
+        db,
+        tenant_id=membership.tenant_id,
+        actor_id=user.id,
+        action="login",
+        entity="user",
+        entity_id=user.id,
+        ip=ip,
+    )
     await db.commit()
 
     access = create_access_token(user.id, membership.tenant_id, membership.role)
@@ -195,6 +217,7 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
 @router.post("/switch-tenant", response_model=TokenOut)
 async def switch_tenant(
     body: SwitchTenantIn,
+    request: Request,
     current: Annotated[CurrentUser, Depends(get_current_user)],
     db: DB,
 ) -> TokenOut:
@@ -221,6 +244,21 @@ async def switch_tenant(
         expires_at=refresh_token_expiry(),
     )
     db.add(rt)
+
+    # audit_log's INSERT policy checks tenant_id against app.tenant_id, which
+    # get_current_user left set to the *original* tenant — move it to the target
+    # before writing a row scoped to the target.
+    await set_rls_context(db, tenant_id=body.tenant_id)
+    log_audit(
+        db,
+        tenant_id=body.tenant_id,
+        actor_id=current.user.id,
+        action="tenant.switch",
+        entity="tenant",
+        entity_id=body.tenant_id,
+        meta={"from_tenant_id": str(current.tenant_id)},
+        ip=client_ip(request),
+    )
     await db.commit()
 
     access = create_access_token(current.user.id, body.tenant_id, membership.role)
@@ -228,7 +266,7 @@ async def switch_tenant(
 
 
 @router.post("/accept-invite", response_model=TokenOut)
-async def accept_invite(body: AcceptInviteIn, db: DB) -> TokenOut:
+async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> TokenOut:
     token_hash = hashlib.sha256(body.token.encode()).hexdigest()
     # Nothing about the caller's tenant or identity is known yet — the invite
     # row is reachable only through the token-hash branch of its RLS policy
@@ -272,6 +310,17 @@ async def accept_invite(body: AcceptInviteIn, db: DB) -> TokenOut:
         expires_at=refresh_token_expiry(),
     )
     db.add(rt)
+
+    log_audit(
+        db,
+        tenant_id=tenant_id,
+        actor_id=user.id,
+        action="invite.accepted",
+        entity="membership",
+        entity_id=membership.id,
+        meta={"role": role, "invited_by": str(invited_by) if invited_by else None},
+        ip=client_ip(request),
+    )
     await db.commit()
 
     access = create_access_token(user.id, tenant_id, role)
