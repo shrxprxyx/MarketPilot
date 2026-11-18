@@ -1,5 +1,6 @@
-import uuid
+﻿import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import jwt
 
@@ -18,7 +19,7 @@ def create_access_token(
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(user_id),
-        "tenant": str(tenant_id),
+        "tenant_id": str(tenant_id),   # was "tenant" — must match what get_current_user reads
         "role": role,
         "iat": now,
         "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -26,8 +27,12 @@ def create_access_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
 
 
-def decode_access_token(token: str) -> dict[str, str]:
-    return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])  # type: ignore[return-value]
+def decode_access_token(token: str) -> dict[str, Any] | None:
+    """Return payload dict, or None if the token is invalid/expired."""
+    try:
+        return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        return None
 
 
 def make_refresh_token() -> str:

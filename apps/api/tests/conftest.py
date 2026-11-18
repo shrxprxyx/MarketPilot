@@ -1,11 +1,17 @@
-# apps/api/tests/conftest.py
+﻿# apps/api/tests/conftest.py
 import asyncio
+
 import pytest
-from sqlalchemy.pool import NullPool
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
 import app.db.engine as db_engine
 from app.config import settings
+
+# All test emails AND their tenant slugs (derived: lowercase, spaces→dashes)
+_TEST_EMAILS_SQL = "'auto@example.com','alice@example.com','bob@example.com'"
+_TEST_SLUGS_SQL  = "'auto-corp','alice-corp','bob-corp'"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -22,19 +28,28 @@ def use_null_pool() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def cleanup_test_user(use_null_pool: None) -> None:
-    """Delete the auto test user before the session starts so register always works."""
+def cleanup_test_data(use_null_pool: None) -> None:
+    """
+    Wipe test rows before the session so every run starts clean.
+    Delete tenants by slug directly — no JOIN, no dependency on users existing.
+    Users delete via CASCADE into memberships + refresh_tokens.
+    """
 
     async def _delete() -> None:
         async with db_engine.AsyncSessionLocal() as session:
             try:
+                # Delete tenants by known slug (cascades memberships)
                 await session.execute(
-                    text("DELETE FROM users WHERE email = 'auto@example.com'")
+                    text(f"DELETE FROM tenants WHERE slug IN ({_TEST_SLUGS_SQL})")
+                )
+                # Delete users (cascades memberships + refresh_tokens)
+                await session.execute(
+                    text(f"DELETE FROM users WHERE email IN ({_TEST_EMAILS_SQL})")
                 )
                 await session.commit()
-            except Exception:
+            except Exception as exc:
                 await session.rollback()
-                # Table doesn't exist yet (fresh DB) — that's fine,
-                # test_register will create the user from scratch.
+                # Tables may not exist yet on a fresh DB — that's fine.
+                print(f"[conftest] cleanup skipped: {exc}")
 
     asyncio.get_event_loop().run_until_complete(_delete())

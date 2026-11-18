@@ -1,39 +1,68 @@
-import logging
-import uuid
-from typing import Annotated
+﻿from typing import Annotated
+from uuid import UUID
 
-import jwt
-from fastapi import Depends
+from fastapi import Depends, Header
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import decode_access_token
-from app.core.errors import problem
+from app.core.errors import ProblemException
+from app.db.session import get_db
+from app.models.membership import Membership
+from app.models.user import User
 
-logger = logging.getLogger(__name__)
-_bearer = HTTPBearer()
+_bearer = HTTPBearer(auto_error=False)
 
 
 class CurrentUser:
-    def __init__(self, user_id: uuid.UUID, tenant_id: uuid.UUID, role: str) -> None:
-        self.user_id = user_id
+    def __init__(self, user: User, tenant_id: UUID, role: str) -> None:
+        self.user = user
         self.tenant_id = tenant_id
         self.role = role
 
 
 async def get_current_user(
-    creds: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CurrentUser:
-    try:
-        payload = decode_access_token(creds.credentials)
-        return CurrentUser(
-            user_id=uuid.UUID(payload["sub"]),
-            tenant_id=uuid.UUID(payload["tenant"]),
-            role=payload["role"],
+    if not credentials:
+        raise ProblemException(401, "Unauthorized", "Missing bearer token.")
+
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        raise ProblemException(401, "Unauthorized", "Invalid or expired access token.")
+
+    user_id = UUID(payload["sub"])
+    tenant_id = UUID(payload["tenant_id"])
+    role = payload.get("role", "member")
+
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise ProblemException(401, "Unauthorized", "User not found.")
+
+    # Verify membership still exists (not removed since token was issued)
+    membership = await db.scalar(
+        select(Membership).where(
+            Membership.user_id == user_id,
+            Membership.tenant_id == tenant_id,
         )
-    except jwt.ExpiredSignatureError as err:
-        raise problem(401, "Unauthorized", "Token has expired.") from err  # type: ignore[misc]
-    except jwt.PyJWTError as err:
-        raise problem(401, "Unauthorized", "Invalid token.") from err  # type: ignore[misc]
+    )
+    if not membership:
+        raise ProblemException(403, "Forbidden", "Not a member of this tenant.")
+
+    return CurrentUser(user=user, tenant_id=tenant_id, role=role)
 
 
-Auth = Annotated[CurrentUser, Depends(get_current_user)]
+def require_role(*roles: str):
+    """Dependency factory: require the current user to have one of the given roles."""
+    async def _check(
+        current: Annotated[CurrentUser, Depends(get_current_user)],
+    ) -> CurrentUser:
+        if current.role not in roles:
+            raise ProblemException(
+                403, "Forbidden",
+                f"Requires role: {' or '.join(roles)}. You have: {current.role}."
+            )
+        return current
+    return Depends(_check)
