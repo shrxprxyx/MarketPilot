@@ -2,9 +2,11 @@
 Member management (FR-TEN-01).
 
 Admins list members, change roles, and deactivate members; the last active admin
-of a tenant can't be demoted, deactivated, or removed. There's no invite endpoint
-yet (that's FR-AUTH-04, separate work), so manager/member rows are seeded directly
-via the DB — same shortcut tests/test_clients.py already uses.
+of a tenant can't be demoted, deactivated, or removed. Manager/member rows are
+seeded directly via the DB (same shortcut tests/test_clients.py uses) rather than
+through the invite flow (FR-AUTH-04, tests/test_invites.py) — these two features
+are independent, and member management works whether a membership arrived via
+invite or this shortcut.
 """
 import asyncio
 from uuid import UUID
@@ -33,6 +35,11 @@ _TEST_EMAILS = (
     "members-manager@example.com",
     "members-member@example.com",
     "members-second-admin@example.com",
+    "manager-no-access@example.com",
+    "manager-target@example.com",
+    "to-deactivate@example.com",
+    "deactivated-login@example.com",
+    "removable@example.com",
 )
 
 

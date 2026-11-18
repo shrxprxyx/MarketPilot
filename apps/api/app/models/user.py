@@ -18,4 +18,8 @@ class User(UUIDMixin, TimestampMixin, Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", nullable=False)
 
-    memberships: Mapped[list[Membership]] = relationship(back_populates="user")
+    # memberships.user_id vs memberships.invited_by are both FKs to users.id —
+    # foreign_keys pins this relationship to user_id specifically.
+    memberships: Mapped[list[Membership]] = relationship(
+        foreign_keys="Membership.user_id", back_populates="user"
+    )

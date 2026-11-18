@@ -9,6 +9,7 @@ async def set_rls_context(
     *,
     tenant_id: UUID | str | None = None,
     user_id: UUID | str | None = None,
+    invite_token_hash: str | None = None,
 ) -> None:
     """Set the Postgres session variables RLS policies read, scoped to the current
     transaction (set_config(..., is_local=true) resets when the transaction ends).
@@ -16,8 +17,11 @@ async def set_rls_context(
     `memberships` is the bridge table between global identity (users) and tenant
     scope, so its policy allows a row through on EITHER the current tenant_id or the
     current user_id — that's what lets a user look up their own memberships before
-    a tenant has been chosen (register/login), while every other tenant-scoped table
-    is keyed on tenant_id alone and gets no such escape hatch.
+    a tenant has been chosen (register/login). `invites` has the same problem for
+    accept-invite (no tenant_id OR user_id is known yet — the invitee may not even
+    have a user row), so its SELECT/DELETE policies add a third branch keyed on the
+    exact token hash the caller already proved possession of. Every other
+    tenant-scoped table is keyed on tenant_id alone and gets no such escape hatch.
     """
     if tenant_id is not None:
         await session.execute(
@@ -28,4 +32,9 @@ async def set_rls_context(
         await session.execute(
             text("SELECT set_config('app.user_id', :v, true)"),
             {"v": str(user_id)},
+        )
+    if invite_token_hash is not None:
+        await session.execute(
+            text("SELECT set_config('app.invite_token_hash', :v, true)"),
+            {"v": invite_token_hash},
         )

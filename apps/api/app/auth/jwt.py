@@ -9,6 +9,7 @@ from app.config import settings
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 30
+INVITE_EXPIRE_DAYS = 7
 
 
 def create_access_token(
@@ -41,3 +42,11 @@ def make_refresh_token() -> str:
 
 def refresh_token_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
+
+def make_invite_token() -> str:
+    return uuid.uuid4().hex + uuid.uuid4().hex
+
+
+def invite_token_expiry() -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRE_DAYS)

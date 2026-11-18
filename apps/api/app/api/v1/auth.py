@@ -22,6 +22,7 @@ from app.auth.rate_limit import (
 from app.core.errors import ProblemException
 from app.db.rls import set_rls_context
 from app.db.session import get_db
+from app.models.invite import Invite
 from app.models.membership import Membership
 from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
@@ -56,6 +57,14 @@ class LoginIn(BaseModel):
 
 class RefreshIn(BaseModel):
     refresh_token: str
+
+
+class AcceptInviteIn(BaseModel):
+    token: str
+    # Sets the password for a brand-new account, or must match the existing one
+    # if this email is already registered (see accept_invite for why one field
+    # covers both cases).
+    password: str = Field(min_length=10)
 
 
 def _client_ip(request: Request) -> str:
@@ -163,6 +172,56 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
 
     await db.commit()
     access = create_access_token(rt.user_id, membership.tenant_id, membership.role)
+    return TokenOut(access_token=access, refresh_token=raw)
+
+
+@router.post("/accept-invite", response_model=TokenOut)
+async def accept_invite(body: AcceptInviteIn, db: DB) -> TokenOut:
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    # Nothing about the caller's tenant or identity is known yet — the invite
+    # row is reachable only through the token-hash branch of its RLS policy
+    # (see app/db/rls.py and migration f3c679dd395a).
+    await set_rls_context(db, invite_token_hash=token_hash)
+
+    invite = await db.scalar(select(Invite).where(Invite.token_hash == token_hash))
+    if not invite or invite.status != "pending" or invite.expires_at < datetime.now(timezone.utc):
+        raise ProblemException(401, "Unauthorized", "Invalid or expired invite.")
+
+    tenant_id = invite.tenant_id
+    role = invite.role
+    invited_by = invite.invited_by
+
+    user = await db.scalar(select(User).where(User.email == invite.email))
+    if user is None:
+        user = User(email=invite.email, hashed_password=hash_password(body.password))
+        db.add(user)
+        await db.flush()
+    elif not verify_password(body.password, user.hashed_password):
+        # Existing account: `password` must authenticate it, not set a new one.
+        raise ProblemException(401, "Unauthorized", "Incorrect password for existing account.")
+
+    await set_rls_context(db, tenant_id=tenant_id, user_id=user.id, invite_token_hash=token_hash)
+
+    already_member = await db.scalar(
+        select(Membership).where(Membership.user_id == user.id, Membership.tenant_id == tenant_id)
+    )
+    if already_member:
+        raise ProblemException(409, "Conflict", "Already a member of this tenant.")
+
+    membership = Membership(user_id=user.id, tenant_id=tenant_id, role=role, invited_by=invited_by)
+    db.add(membership)
+    await db.delete(invite)  # one-time use
+
+    raw = make_refresh_token()
+    rt = RefreshToken(
+        user_id=user.id,
+        token_hash=hashlib.sha256(raw.encode()).hexdigest(),
+        expires_at=refresh_token_expiry(),
+    )
+    db.add(rt)
+    await db.commit()
+
+    access = create_access_token(user.id, tenant_id, role)
     return TokenOut(access_token=access, refresh_token=raw)
 
 
