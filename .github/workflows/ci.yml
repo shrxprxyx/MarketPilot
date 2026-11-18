@@ -90,6 +90,12 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # LayoutProps/PageProps are ambient types Next.js writes into .next/types —
+      # they don't exist on a fresh checkout until this generates them, so plain
+      # `tsc --noEmit` fails here with "Cannot find name 'LayoutProps'".
+      - name: Generate route types
+        run: pnpm exec next typegen
+
       - name: Type-check
         run: pnpm exec tsc --noEmit
 
