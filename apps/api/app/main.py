@@ -5,7 +5,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import ai_connections, audit, auth, clients, health, me, members, ready
+from app.api.v1 import (
+    ai_connections,
+    ai_routes,
+    ai_usage,
+    audit,
+    auth,
+    clients,
+    health,
+    me,
+    members,
+    ready,
+)
 from app.config import settings
 from app.core.errors import ProblemException, problem_exception_handler, unhandled_exception_handler
 from app.core.logging import configure_logging
@@ -44,3 +55,5 @@ app.include_router(clients.router, prefix="/api/v1")
 app.include_router(members.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(ai_connections.router, prefix="/api/v1")
+app.include_router(ai_routes.router, prefix="/api/v1")
+app.include_router(ai_usage.router, prefix="/api/v1")
