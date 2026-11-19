@@ -7,6 +7,7 @@ from app.models.ai_connection import AIConnection  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.brand_profile import BrandProfile  # noqa: F401
 from app.models.client import Client  # noqa: F401
+from app.models.document import Document, DocumentChunk  # noqa: F401
 from app.models.invite import Invite  # noqa: F401
 from app.models.membership import Membership  # noqa: F401
 from app.models.model_pricing import ModelPricing  # noqa: F401
