@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url_direct: str
     redis_url: str
     jwt_secret: str
+    fernet_keys: str
     allowed_origins: str = "http://localhost:3000"
     app_user_db_password: str = "app_user_dev_password"
 
