@@ -13,6 +13,7 @@ from app.api.v1 import (
     auth,
     clients,
     health,
+    knowledge,
     me,
     members,
     ready,
@@ -57,3 +58,4 @@ app.include_router(audit.router, prefix="/api/v1")
 app.include_router(ai_connections.router, prefix="/api/v1")
 app.include_router(ai_routes.router, prefix="/api/v1")
 app.include_router(ai_usage.router, prefix="/api/v1")
+app.include_router(knowledge.router, prefix="/api/v1")
