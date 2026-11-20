@@ -25,6 +25,7 @@ export function RegisterForm() {
 
   return (
     <AuthCard
+      eyebrow="Create account"
       title="Create your agency"
       description="Start a workspace for your team and clients."
       footer={
@@ -61,7 +62,7 @@ export function RegisterForm() {
           {...register("password")}
         />
         <FormError message={error} />
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" size="lg" className="h-11 w-full cursor-pointer" disabled={isSubmitting}>
           {isSubmitting ? "Creating account…" : "Create account"}
         </Button>
       </form>

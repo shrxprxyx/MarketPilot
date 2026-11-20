@@ -9,7 +9,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-outfit), var(--font-geist-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -51,15 +51,15 @@
 :root {
   color-scheme: dark;
   /* Layered near-black surfaces */
-  --background: oklch(0.13 0.005 275);
+  --background: oklch(0.12 0.004 275);
   --foreground: oklch(0.97 0.003 275);
   --card: oklch(0.17 0.006 275);
   --card-foreground: oklch(0.97 0.003 275);
   --popover: oklch(0.2 0.007 275);
   --popover-foreground: oklch(0.97 0.003 275);
   /* Single accent: indigo/violet */
-  --primary: oklch(0.62 0.2 277);
-  --primary-foreground: oklch(0.99 0 0);
+  --primary: oklch(0.98 0.002 275);
+  --primary-foreground: oklch(0.13 0.005 275);
   --secondary: oklch(0.22 0.008 275);
   --secondary-foreground: oklch(0.97 0.003 275);
   --muted: oklch(0.22 0.008 275);
@@ -67,9 +67,9 @@
   --accent: oklch(0.25 0.012 275);
   --accent-foreground: oklch(0.97 0.003 275);
   --destructive: oklch(0.7 0.19 22);
-  --border: oklch(1 0 0 / 9%);
+  --border: oklch(1 0 0 / 8%);
   --input: oklch(1 0 0 / 13%);
-  --ring: oklch(0.62 0.2 277);
+  --ring: oklch(0.72 0.01 275);
   --chart-1: oklch(0.62 0.2 277);
   --chart-2: oklch(0.7 0.14 200);
   --chart-3: oklch(0.75 0.15 150);
@@ -78,12 +78,12 @@
   --radius: 0.625rem;
   --sidebar: oklch(0.15 0.006 275);
   --sidebar-foreground: oklch(0.97 0.003 275);
-  --sidebar-primary: oklch(0.62 0.2 277);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-primary: oklch(0.98 0.002 275);
+  --sidebar-primary-foreground: oklch(0.13 0.005 275);
   --sidebar-accent: oklch(0.22 0.01 275);
   --sidebar-accent-foreground: oklch(0.97 0.003 275);
   --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.62 0.2 277);
+  --sidebar-ring: oklch(0.72 0.01 275);
 }
 
 @layer base {
@@ -95,5 +95,14 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Tailwind 4 resets buttons to the default cursor; every clickable element gets a pointer. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  select:not(:disabled),
+  label[for] {
+    cursor: pointer;
   }
 }

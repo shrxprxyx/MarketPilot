@@ -26,6 +26,7 @@ export function AcceptInviteForm() {
   if (!token) {
     return (
       <AuthCard
+        eyebrow="Invitation"
         title="This invite link is invalid"
         description="It may be incomplete, expired, or already used. Ask your agency admin to send a new invite."
         footer={
@@ -33,14 +34,13 @@ export function AcceptInviteForm() {
             Go to sign in
           </Link>
         }
-      >
-        {null}
-      </AuthCard>
+      />
     );
   }
 
   return (
     <AuthCard
+      eyebrow="Invitation"
       title="Join your team"
       description="Set a password to accept the invite. If you already have an account, enter your existing password."
     >
@@ -58,7 +58,7 @@ export function AcceptInviteForm() {
           {...register("password")}
         />
         <FormError message={error} />
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" size="lg" className="h-11 w-full" disabled={isSubmitting}>
           {isSubmitting ? "Joining…" : "Join team"}
         </Button>
       </form>

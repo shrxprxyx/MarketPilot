@@ -24,6 +24,7 @@ export function LoginForm() {
 
   return (
     <AuthCard
+      eyebrow="Sign in"
       title="Welcome back"
       description="Sign in to your agency workspace."
       footer={
@@ -53,7 +54,7 @@ export function LoginForm() {
           {...register("password")}
         />
         <FormError message={error} />
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" size="lg" className="h-11 w-full" disabled={isSubmitting}>
           {isSubmitting ? "Signing in…" : "Sign in"}
         </Button>
       </form>
