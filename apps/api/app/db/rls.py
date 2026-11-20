@@ -22,6 +22,12 @@ async def set_rls_context(
     have a user row), so its SELECT/DELETE policies add a third branch keyed on the
     exact token hash the caller already proved possession of. Every other
     tenant-scoped table is keyed on tenant_id alone and gets no such escape hatch.
+
+    Policies MUST read these settings as
+    `NULLIF(current_setting('app.tenant_id', true), '')::uuid`, never a bare
+    `current_setting(...)::uuid`: after a pooled connection has set a variable once,
+    later transactions see '' instead of NULL, and the bare cast then raises
+    (migration d4f7b1c8a2e6, tests/isolation/test_pooled_connection.py).
     """
     if tenant_id is not None:
         await session.execute(
