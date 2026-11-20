@@ -1,8 +1,8 @@
 import { ApiError } from "@/lib/api/problem";
-import { apiFetch, refreshSession, signIn, signOut } from "@/lib/api/client";
+import { apiFetch, refreshSession, signIn, signOut, switchTenant } from "@/lib/api/client";
 import { useSession } from "@/lib/auth/session-store";
 
-const me = { user_id: "u1", tenant_id: "t1", role: "admin" };
+const me = { user_id: "u1", tenant_id: "t1", role: "admin", email: "a@b.co", tenant_name: "Acme" };
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -157,5 +157,36 @@ describe("signIn / signOut", () => {
     await signOut();
     expect(m.count("POST /api/auth/logout")).toBe(1);
     expect(useSession.getState().status).toBe("anonymous");
+  });
+});
+
+describe("switchTenant", () => {
+  it("posts the tenant id with the Bearer token, then stores the new token and /me", async () => {
+    useSession.getState().setSession("old", me as never);
+    let sent: unknown;
+    const newMe = { ...me, tenant_id: "t2", tenant_name: "Globex", role: "manager" };
+    const m = mockFetch({
+      "POST /api/auth/switch-tenant": async (req) => {
+        sent = await req.json();
+        return json({ access_token: "tok2" });
+      },
+      "GET /api/me": () => json(newMe),
+    });
+    await switchTenant("t2");
+    expect(sent).toEqual({ tenant_id: "t2" });
+    expect(m.calls[0].auth).toBe("Bearer old");
+    expect(useSession.getState().accessToken).toBe("tok2");
+    expect(useSession.getState().me).toEqual(newMe);
+  });
+
+  it("throws the API error and keeps the old session when the switch is refused", async () => {
+    useSession.getState().setSession("old", me as never);
+    mockFetch({
+      "POST /api/auth/switch-tenant": () =>
+        json({ status: 403, title: "Forbidden", detail: "Not a member of that tenant." }, 403),
+    });
+    await expect(switchTenant("t9")).rejects.toMatchObject({ status: 403 });
+    expect(useSession.getState().accessToken).toBe("old");
+    expect(useSession.getState().me).toEqual(me);
   });
 });

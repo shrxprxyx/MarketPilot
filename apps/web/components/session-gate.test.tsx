@@ -45,7 +45,13 @@ describe("SessionGate", () => {
   });
 
   it("renders children once authenticated, without refreshing again", () => {
-    useSession.getState().setSession("tok", { user_id: "u", tenant_id: "t", role: "admin" });
+    useSession.getState().setSession("tok", {
+      user_id: "u",
+      tenant_id: "t",
+      role: "admin",
+      email: "a@b.co",
+      tenant_name: "Acme",
+    });
     render(
       <SessionGate>
         <p>secret</p>

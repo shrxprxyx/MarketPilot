@@ -1,6 +1,6 @@
 import { useSession, type Me } from "@/lib/auth/session-store";
 
-const me: Me = { user_id: "u1", tenant_id: "t1", role: "admin" };
+const me: Me = { user_id: "u1", tenant_id: "t1", role: "admin", email: "a@b.co", tenant_name: "Acme" };
 
 describe("session store", () => {
   beforeEach(() => {

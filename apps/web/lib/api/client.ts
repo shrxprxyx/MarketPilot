@@ -71,6 +71,16 @@ export async function signIn(
   useSession.getState().setSession(access_token, me);
 }
 
+/** Moves the session to another agency the user belongs to (new token pair, cookie rotated). */
+export async function switchTenant(tenantId: string): Promise<void> {
+  const { access_token } = await apiFetch<{ access_token: string }>(
+    "/auth/switch-tenant",
+    { method: "POST", body: JSON.stringify({ tenant_id: tenantId }) },
+  );
+  const me = await readJson<Me>(await send("/me", {}, access_token));
+  useSession.getState().setSession(access_token, me);
+}
+
 export async function signOut(): Promise<void> {
   try {
     await send("/auth/logout", { method: "POST" });

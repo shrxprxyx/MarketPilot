@@ -1,9 +1,13 @@
 import { create } from "zustand";
 
+export type Role = "admin" | "manager" | "member";
+
 export type Me = {
   user_id: string;
   tenant_id: string;
-  role: "admin" | "manager" | "member";
+  role: Role;
+  email: string;
+  tenant_name: string;
 };
 
 type SessionState = {
