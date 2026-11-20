@@ -1,4 +1,4 @@
-import { isActive, navFor } from "@/lib/nav";
+import { isActive, navFor, pageLabel } from "@/lib/nav";
 
 const labels = (role: Parameters<typeof navFor>[0]) =>
   navFor(role).flatMap((s) => s.items.map((i) => i.label));
@@ -45,5 +45,21 @@ describe("isActive", () => {
 
   it("does not match a sibling that merely shares a prefix", () => {
     expect(isActive("/clients", "/clients-archive")).toBe(false);
+  });
+});
+
+describe("pageLabel", () => {
+  it("names the page for a path, regardless of role", () => {
+    expect(pageLabel("/")).toBe("Dashboard");
+    expect(pageLabel("/team")).toBe("Team");
+    expect(pageLabel("/settings/ai")).toBe("AI models");
+  });
+
+  it("uses the parent item for nested routes", () => {
+    expect(pageLabel("/clients/123")).toBe("Clients");
+  });
+
+  it("returns null for an unknown path", () => {
+    expect(pageLabel("/nope")).toBeNull();
   });
 });

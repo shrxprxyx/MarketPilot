@@ -47,3 +47,11 @@ export function isActive(href: string, pathname: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
+
+/** The page name for a path (nested routes use their parent item), or null if unknown. */
+export function pageLabel(pathname: string): string | null {
+  const match = SECTIONS.flatMap((s) => s.items)
+    .filter((item) => isActive(item.href, pathname))
+    .sort((a, b) => b.href.length - a.href.length)[0];
+  return match?.label ?? null;
+}
