@@ -26,7 +26,7 @@ export function Topbar() {
         </Button>
         <Breadcrumb />
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3 [&>*]:min-w-0">
         <AgencySwitcher />
         <UserMenu />
       </div>
