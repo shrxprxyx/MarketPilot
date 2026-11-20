@@ -8,13 +8,13 @@ import { useSession } from "@/lib/auth/session-store";
 export default function HomePage() {
   const me = useSession((s) => s.me);
   return (
-    <main className="flex flex-1 flex-col items-start gap-4 p-8">
+    <div className="flex flex-col items-start gap-4">
       <h1 className="text-2xl font-semibold tracking-tight">You&apos;re signed in</h1>
       <p className="text-muted-foreground">Role: {me?.role}</p>
       {/* SessionGate sends the user to /login once the session is cleared. */}
       <Button variant="secondary" onClick={() => void signOut()}>
         Sign out
       </Button>
-    </main>
+    </div>
   );
 }
