@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.budget import hard_stop_reached
 from app.ai.providers import ADAPTERS, Completion, Message, ProviderError, TransientProviderError
 from app.core.crypto import decrypt_secret
 from app.models.ai_connection import AIConnection
@@ -30,6 +31,10 @@ BACKOFF_SECONDS = 0.5
 
 class GatewayError(Exception):
     """Safe-to-show failure (no route, provider down, invalid output)."""
+
+
+class BudgetExceededError(GatewayError):
+    """The tenant's monthly budget is reached and its hard stop is on."""
 
 
 class NoRouteError(GatewayError):
@@ -156,6 +161,10 @@ async def complete(
     client_id: UUID | None = None,
     schema: type[T] | None = None,
 ) -> GatewayResult:
+    if await hard_stop_reached(db, tenant_id):
+        raise BudgetExceededError(
+            "Monthly AI budget reached. An admin can raise it in AI models."
+        )
     route, targets = await _targets(db, tenant_id, task)
     last_error: ProviderError | None = None
     for target in targets:

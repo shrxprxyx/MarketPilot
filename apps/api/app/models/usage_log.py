@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Integer, Numeric, String
+from sqlalchemy import ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,8 @@ class UsageLog(UUIDMixin, TimestampMixin, Base):
     price is known for the model (local models are priced at zero)."""
 
     __tablename__ = "usage_logs"
+    # Budget spend and the usage dashboard both filter by tenant and a created_at window.
+    __table_args__ = (Index("ix_usage_logs_tenant_created", "tenant_id", "created_at"),)
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True

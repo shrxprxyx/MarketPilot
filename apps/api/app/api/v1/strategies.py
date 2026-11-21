@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.gateway import GatewayError, NoRouteError
+from app.ai.gateway import BudgetExceededError, GatewayError, NoRouteError
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
@@ -77,6 +77,8 @@ async def create_strategy(
             client=client,
             month=body.month,
         )
+    except BudgetExceededError as exc:
+        raise ProblemException(402, "Payment Required", str(exc)) from exc
     except NoRouteError as exc:
         raise ProblemException(
             409, "Conflict", "Set up a model for the strategy task in AI models."

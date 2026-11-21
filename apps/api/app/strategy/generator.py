@@ -67,10 +67,10 @@ def build_messages(
     return [{"role": "system", "content": SYSTEM_RULES}, {"role": "user", "content": user}]
 
 
-async def generate_strategy(
-    db: AsyncSession, *, tenant_id: UUID, user_id: UUID, client: Client, month: str
-) -> Strategy:
-    """Raises gateway.GatewayError on failure; nothing is stored then."""
+async def prepare_prompt(
+    db: AsyncSession, *, tenant_id: UUID, client: Client, month: str
+) -> tuple[list[Message], list[RetrievedChunk]]:
+    """Retrieval + prompt assembly, shared by generation and the pre-flight estimate."""
     profile = await db.scalar(select(BrandProfile).where(BrandProfile.client_id == client.id))
     query = " ".join(
         [
@@ -82,13 +82,21 @@ async def generate_strategy(
     chunks = await search_chunks(
         db, tenant_id=tenant_id, client_id=client.id, query=query.strip(), k=8
     )
+    return build_messages(client, profile, chunks, month), chunks
+
+
+async def generate_strategy(
+    db: AsyncSession, *, tenant_id: UUID, user_id: UUID, client: Client, month: str
+) -> Strategy:
+    """Raises gateway.GatewayError on failure; nothing is stored then."""
+    messages, chunks = await prepare_prompt(db, tenant_id=tenant_id, client=client, month=month)
     result = await gateway.complete(
         db,
         tenant_id=tenant_id,
         user_id=user_id,
         task="strategy",
         client_id=client.id,
-        messages=build_messages(client, profile, chunks, month),
+        messages=messages,
         schema=StrategyPlan,
     )
     assert isinstance(result.parsed, StrategyPlan)
