@@ -97,7 +97,7 @@ export function StrategySection({ clientId }: { clientId: string }) {
             {items.map((s) => (
               <Button
                 key={s.id}
-                variant="outline"
+                variant={shown?.id === s.id ? "default" : "outline"}
                 size="sm"
                 className="cursor-pointer"
                 aria-pressed={shown?.id === s.id}
