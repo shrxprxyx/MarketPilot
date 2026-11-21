@@ -1,16 +1,5 @@
-import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
-import { registerAgency } from "./helpers";
-
-// Runs SQL as the DB owner (bypasses RLS) to seed usage. In CI, set E2E_DATABASE_URL to a
-// libpq URL; locally it goes through the compose Postgres container.
-function sql(query: string): string {
-  const url = process.env.E2E_DATABASE_URL;
-  const [cmd, args] = url
-    ? ["psql", [url, "-tA", "-c", query]]
-    : ["docker", ["exec", "marketpilot-postgres-1", "psql", "-U", "marketpilot", "-d", "marketpilot", "-tA", "-c", query]];
-  return execFileSync(cmd as string, args as string[], { encoding: "utf8" }).trim();
-}
+import { registerAgency, sql } from "./helpers";
 
 test("AI models and usage", async ({ page }) => {
   const { agency } = await registerAgency(page, "ai");
