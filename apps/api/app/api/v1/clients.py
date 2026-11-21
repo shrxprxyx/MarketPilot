@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -14,7 +15,15 @@ from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.brand_profile import BrandProfile
 from app.models.client import Client
+from app.rag.auto_docs import (
+    BRAND_PROFILE_TITLE,
+    BRAND_PROFILE_TYPE,
+    brand_profile_document_text,
+    sync_auto_document,
+)
+from app.rag.queue import enqueue_ingest
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
@@ -215,5 +224,21 @@ async def upsert_brand_profile(
         db.add(profile)
     for field, value in body.model_dump().items():
         setattr(profile, field, value)
+    # FR-RAG-02: keep the client's index in sync with the saved profile.
+    doc_id = await sync_auto_document(
+        db,
+        tenant_id=current.tenant_id,
+        client_id=client_id,
+        source_type=BRAND_PROFILE_TYPE,
+        title=BRAND_PROFILE_TITLE,
+        text=brand_profile_document_text(profile),
+    )
     await db.commit()
+    if doc_id is not None:
+        try:
+            enqueue_ingest(current.tenant_id, doc_id)
+        except Exception:
+            # A broken queue must never fail a save. The document stays "pending" and
+            # the next save or a Re-index retries it.
+            logger.exception("Could not queue brand profile indexing")
     return profile

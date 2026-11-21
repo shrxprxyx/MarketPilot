@@ -1,6 +1,7 @@
 """Hybrid retrieval (FR-RAG-03, SRS §10.3): top 20 by vector cosine similarity and
 top 20 by full-text rank, fused with reciprocal rank fusion, trimmed to a token
 budget. Always filtered by tenant and client (RLS is the backstop)."""
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -42,6 +43,7 @@ async def search_chunks(
     query: str,
     k: int = 8,
     source_type: str | None = None,
+    exclude_source_types: Sequence[str] = (),
     token_budget: int = 3000,
 ) -> list[RetrievedChunk]:
     base_filters = [
@@ -51,6 +53,8 @@ async def search_chunks(
     ]
     if source_type:
         base_filters.append(Document.source_type == source_type)
+    if exclude_source_types:
+        base_filters.append(Document.source_type.not_in(exclude_source_types))
 
     qvec = await embed_query(query)
     vector_ids = list(

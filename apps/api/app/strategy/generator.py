@@ -1,7 +1,6 @@
 """Strategy generation (FR-STR-01/04/07, FR-RAG-05). Prompt order follows SRS §10.2:
 system rules, brand profile, facts, retrieved chunks in delimited blocks, schema."""
 import json
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -12,6 +11,7 @@ from app.ai.providers import Message
 from app.models.brand_profile import BrandProfile
 from app.models.client import Client
 from app.models.strategy import Strategy
+from app.rag.auto_docs import BRAND_PROFILE_TYPE, field_line, render_brand_profile
 from app.rag.retrieval import RetrievedChunk, search_chunks
 from app.strategy.schemas import StrategyPlan
 
@@ -25,31 +25,16 @@ SYSTEM_RULES = (
 )
 
 
-def _line(label: str, value: Any) -> str:
-    if not value:
-        return ""
-    if isinstance(value, list):
-        value = "; ".join(str(v) for v in value)
-    return f"{label}: {value}\n"
-
-
 def build_messages(
     client: Client, profile: BrandProfile | None, chunks: list[RetrievedChunk], month: str
 ) -> list[Message]:
     brand = "Brand profile: none provided.\n"
     if profile:
-        brand = "Brand profile:\n" + (
-            _line("Voice", profile.voice)
-            + _line("Tone", profile.tone)
-            + _line("Audience", profile.audience)
-            + _line("Keywords", profile.keywords)
-            + _line("Do", profile.do_rules)
-            + _line("Don't", profile.dont_rules)
-        )
+        brand = "Brand profile:\n" + render_brand_profile(profile)
     facts = (
         f"Client: {client.name}\n"
-        + _line("Industry", client.industry)
-        + _line("Goals", client.goals)
+        + field_line("Industry", client.industry)
+        + field_line("Goals", client.goals)
         + f"Strategy month: {month}\n"
     )
     if chunks:
@@ -80,7 +65,14 @@ async def prepare_prompt(
         ]
     )
     chunks = await search_chunks(
-        db, tenant_id=tenant_id, client_id=client.id, query=query.strip(), k=8
+        db,
+        tenant_id=tenant_id,
+        client_id=client.id,
+        query=query.strip(),
+        k=8,
+        # The prompt already carries the brand profile verbatim; indexing it as well
+        # would repeat it and list it as a "source".
+        exclude_source_types=(BRAND_PROFILE_TYPE,),
     )
     return build_messages(client, profile, chunks, month), chunks
 

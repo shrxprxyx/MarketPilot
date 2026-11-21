@@ -17,6 +17,7 @@ from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.client import Client
 from app.models.document import Document
+from app.rag.auto_docs import AUTO_SOURCE_TYPES
 from app.rag.extract import (
     MAX_UPLOAD_BYTES,
     ExtractionError,
@@ -203,6 +204,12 @@ async def delete_document(
 ) -> None:
     """Chunks go with the document (FK cascade)."""
     doc = await _document_or_404(db, current, document_id)
+    if doc.source_type in AUTO_SOURCE_TYPES:
+        raise ProblemException(
+            409,
+            "Conflict",
+            "This document is managed automatically from the Brand profile tab.",
+        )
     log_audit(
         db,
         tenant_id=current.tenant_id,
