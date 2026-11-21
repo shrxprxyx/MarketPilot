@@ -21,6 +21,8 @@ export type AiRoute = {
   fallback_model: string | null;
 };
 
+export type UsageGroup = "day" | "client" | "task" | "model";
+
 export type ConnectionTest = { ok: boolean; models: string[] };
 
 export type UsageRow = {
@@ -45,6 +47,15 @@ export function useAiUsage(enabled: boolean) {
   return useQuery({
     queryKey: ["ai-usage", "day", 30],
     queryFn: () => apiFetch<UsageRow[]>("/ai/usage?group_by=day&days=30"),
+    enabled,
+  });
+}
+
+// Not keepPreviousData: a range switch must not show the old range's numbers as current.
+export function useAiUsageBy(groupBy: UsageGroup, days: number, enabled: boolean) {
+  return useQuery({
+    queryKey: ["ai-usage", groupBy, days],
+    queryFn: () => apiFetch<UsageRow[]>(`/ai/usage?group_by=${groupBy}&days=${days}`),
     enabled,
   });
 }
