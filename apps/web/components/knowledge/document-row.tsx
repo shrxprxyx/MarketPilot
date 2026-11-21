@@ -26,7 +26,11 @@ const SOURCE_LABELS: Record<string, string> = {
   upload: "Upload",
   brand_doc: "Brand doc",
   past_content: "Past content",
+  brand_profile: "Brand profile",
 };
+
+// Written by the app from the Brand profile tab, so it cannot be deleted here.
+const AUTO_SOURCES = new Set(["brand_profile"]);
 
 // Colour is never the only signal: every status also has its own text.
 function StatusBadge({ status }: { status: DocStatus }) {
@@ -58,6 +62,7 @@ export function DocumentRow({
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const isAuto = AUTO_SOURCES.has(doc.source_type);
 
   async function runReindex() {
     setError(null);
@@ -90,6 +95,7 @@ export function DocumentRow({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isAuto && <Badge variant="outline">Auto</Badge>}
           <StatusBadge status={doc.status} />
           {canWrite && (
             <>
@@ -101,14 +107,16 @@ export function DocumentRow({
               >
                 <RefreshCw className="size-4" />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Delete ${doc.title}`}
-                onClick={() => setConfirming(true)}
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              {!isAuto && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Delete ${doc.title}`}
+                  onClick={() => setConfirming(true)}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
             </>
           )}
         </div>

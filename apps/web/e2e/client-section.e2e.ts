@@ -42,7 +42,13 @@ test("client section: create, edit, brand profile, knowledge, archive and restor
 
   // Knowledge: paste text, upload a file, both reach Ready (needs the Celery worker).
   await page.getByRole("tab", { name: "Knowledge" }).click();
-  await expect(panel.getByText("No documents yet")).toBeVisible();
+  // The saved brand profile is already here, indexed automatically: labelled "Auto",
+  // re-indexable, but not deletable.
+  const profileRow = panel.getByRole("listitem").filter({ hasText: "Brand profile" });
+  await expect(profileRow.getByText("Auto", { exact: true })).toBeVisible();
+  await expect(profileRow.getByText("Ready", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Re-index Brand profile" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete Brand profile" })).toHaveCount(0);
   await page.getByLabel("Title").fill("Voice notes");
   await page.getByLabel("Text", { exact: true }).fill("Acme sells organic dog treats made in Portland.");
   await page.getByRole("button", { name: "Add text" }).click();
@@ -54,7 +60,7 @@ test("client section: create, edit, brand profile, knowledge, archive and restor
     buffer: Buffer.from("Competitors include BarkBox and Chewy. Our edge is local peanut butter."),
   });
   await expect(panel.getByText("competitors.txt")).toBeVisible();
-  await expect(panel.getByText("Ready")).toHaveCount(2, { timeout: 30_000 });
+  await expect(panel.getByText("Ready")).toHaveCount(3, { timeout: 30_000 });
   await page.screenshot({ path: "test-results/shots/knowledge.png" });
 
   // Wrong file type is blocked in the browser with a clear message.
@@ -67,7 +73,7 @@ test("client section: create, edit, brand profile, knowledge, archive and restor
 
   // Re-index and delete (with confirmation).
   await page.getByRole("button", { name: "Re-index Voice notes" }).click();
-  await expect(panel.getByText("Ready")).toHaveCount(2, { timeout: 30_000 });
+  await expect(panel.getByText("Ready")).toHaveCount(3, { timeout: 30_000 });
   await page.getByRole("button", { name: "Delete competitors.txt" }).click();
   await page.getByRole("button", { name: "Delete document" }).click();
   await expect(panel.getByText("competitors.txt")).toHaveCount(0);

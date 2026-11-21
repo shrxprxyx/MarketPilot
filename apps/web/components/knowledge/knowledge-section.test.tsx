@@ -67,6 +67,21 @@ describe("document list", () => {
     expect(screen.getByText("Brand doc")).toBeInTheDocument();
   });
 
+  it("labels the auto-managed brand profile and offers re-index but not delete", () => {
+    as("manager");
+    setList([doc({ title: "Brand profile", source_type: "brand_profile" })]);
+    render(<KnowledgeSection clientId="c1" />);
+    expect(screen.getByText("Auto")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Re-index Brand profile" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Brand profile" })).not.toBeInTheDocument();
+  });
+
+  it("does not mark ordinary documents as auto", () => {
+    as("manager");
+    render(<KnowledgeSection clientId="c1" />);
+    expect(screen.queryByText("Auto")).not.toBeInTheDocument();
+  });
+
   it("shows the error text for a failed document", () => {
     as("manager");
     setList([doc({ status: "failed", error: "Could not read this PDF." })]);
