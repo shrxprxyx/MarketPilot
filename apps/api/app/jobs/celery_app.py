@@ -1,6 +1,7 @@
 from celery import Celery
 
 from app.config import settings
+from app.db import base_imports  # noqa: F401 — register every ORM model so FKs resolve in the worker
 
 celery_app = Celery(
     "marketpilot",
