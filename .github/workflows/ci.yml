@@ -105,3 +105,101 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  # Real-browser tests against the full stack: API + Celery worker + built Next app.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [api, web]
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://app_user:app_user_dev_password@localhost:5432/marketpilot
+      DATABASE_URL_DIRECT: postgresql+psycopg://marketpilot:marketpilot@localhost:5432/marketpilot
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: ci-test-secret-not-for-production
+      FERNET_KEYS: x9aTqq6rBp68ynJ6fKa_8kUt1U89vVZFzwZSXgj34xo=
+      ALLOWED_ORIGINS: http://localhost:3000
+      APP_USER_DB_PASSWORD: app_user_dev_password
+      E2E_DATABASE_URL: postgresql://marketpilot:marketpilot@localhost:5432/marketpilot
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: marketpilot
+          POSTGRES_PASSWORD: marketpilot
+          POSTGRES_DB: marketpilot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U marketpilot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: uv sync --frozen --all-groups
+
+      - name: Apply migrations
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium and psql
+        working-directory: apps/web
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          sudo apt-get install -y postgresql-client
+
+      - name: Build web
+        working-directory: apps/web
+        run: pnpm build
+
+      - name: Start API, worker and web
+        run: |
+          (cd apps/api && nohup uv run uvicorn app.main:app --port 8000 > "$RUNNER_TEMP/api.log" 2>&1 &)
+          (cd apps/api && nohup uv run celery -A app.jobs.celery_app worker --pool=solo -l info > "$RUNNER_TEMP/worker.log" 2>&1 &)
+          (cd apps/web && nohup pnpm start > "$RUNNER_TEMP/web.log" 2>&1 &)
+          for url in http://localhost:8000/api/v1/ready http://localhost:3000/login; do
+            for i in $(seq 1 60); do curl -sf "$url" > /dev/null && break; sleep 2; done
+            curl -sf "$url" > /dev/null
+          done
+
+      - name: Run Playwright tests
+        working-directory: apps/web
+        run: pnpm e2e
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: |
+            apps/web/test-results
+            ${{ runner.temp }}/api.log
+            ${{ runner.temp }}/worker.log
+            ${{ runner.temp }}/web.log
