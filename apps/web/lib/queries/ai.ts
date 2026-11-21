@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
+import type { ConnectionValues, RouteValues } from "@/lib/ai/schemas";
 
 export type AiConnection = {
   id: string;
@@ -9,6 +10,18 @@ export type AiConnection = {
   key_last4: string | null;
   is_active: boolean;
 };
+
+export type AiRoute = {
+  task_type: string;
+  connection_id: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  fallback_connection_id: string | null;
+  fallback_model: string | null;
+};
+
+export type ConnectionTest = { ok: boolean; models: string[] };
 
 export type UsageRow = {
   key: string | null;
@@ -33,5 +46,50 @@ export function useAiUsage(enabled: boolean) {
     queryKey: ["ai-usage", "day", 30],
     queryFn: () => apiFetch<UsageRow[]>("/ai/usage?group_by=day&days=30"),
     enabled,
+  });
+}
+
+export function useAiRoutes(enabled: boolean) {
+  return useQuery({
+    queryKey: ["ai-routes"],
+    queryFn: () => apiFetch<AiRoute[]>("/ai/routes"),
+    enabled,
+  });
+}
+
+export function useCreateConnection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ConnectionValues) =>
+      apiFetch<AiConnection>("/ai/connections", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ai-connections"] }),
+  });
+}
+
+export function useTestConnection() {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<ConnectionTest>(`/ai/connections/${id}/test`, { method: "POST" }),
+  });
+}
+
+export function useDeleteConnection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiFetch<void>(`/ai/connections/${id}`, { method: "DELETE" }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ["ai-connections"] }),
+        qc.invalidateQueries({ queryKey: ["ai-routes"] }),
+      ]),
+  });
+}
+
+export function useSaveRoutes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (routes: RouteValues[]) =>
+      apiFetch<AiRoute[]>("/ai/routes", { method: "PUT", body: JSON.stringify(routes) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ai-routes"] }),
   });
 }
