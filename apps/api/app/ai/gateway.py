@@ -32,6 +32,10 @@ class GatewayError(Exception):
     """Safe-to-show failure (no route, provider down, invalid output)."""
 
 
+class NoRouteError(GatewayError):
+    """The tenant has no usable route for the task (not set up, or its connection is gone)."""
+
+
 @dataclass
 class GatewayResult:
     text: str
@@ -73,7 +77,7 @@ async def _targets(
         )
     )
     if route is None:
-        raise GatewayError(f"No model route is configured for task '{task}'.")
+        raise NoRouteError(f"No model route is configured for task '{task}'.")
 
     async def _conn(conn_id: UUID) -> AIConnection | None:
         found: AIConnection | None = await db.scalar(
@@ -94,7 +98,7 @@ async def _targets(
         if fallback:
             targets.append(_Target(fallback, route.fallback_model))
     if not targets:
-        raise GatewayError(f"The connection for task '{task}' is missing or inactive.")
+        raise NoRouteError(f"The connection for task '{task}' is missing or inactive.")
     return route, targets
 
 
