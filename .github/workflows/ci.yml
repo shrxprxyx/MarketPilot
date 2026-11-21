@@ -179,6 +179,12 @@ jobs:
         working-directory: apps/web
         run: pnpm build
 
+      # The embedding model downloads on first use (~30s on a fresh runner). Fetch it once
+      # up front so no test, and neither the API nor the worker, pays for it mid-run.
+      - name: Warm the embedding model
+        working-directory: apps/api
+        run: uv run python -c "from app.rag.embeddings import embed_query; import asyncio; asyncio.run(embed_query('warm up'))"
+
       - name: Start API, worker and web
         run: |
           (cd apps/api && nohup uv run uvicorn app.main:app --port 8000 > "$RUNNER_TEMP/api.log" 2>&1 &)
