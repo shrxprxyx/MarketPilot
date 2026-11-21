@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useClient, useCreateClient } from "@/lib/queries/clients";
+import { useArchiveClient, useClient, useCreateClient, useUpdateClient } from "@/lib/queries/clients";
 
 // Plain delegate rather than vi.fn(): see lib/queries/tenants.test.tsx.
 const calls: { path: string; init?: RequestInit }[] = [];
@@ -35,5 +35,24 @@ describe("client hooks", () => {
     expect(calls[0].init?.method).toBe("POST");
     expect(JSON.parse(calls[0].init?.body as string)).toEqual({ name: "Acme", industry: "Pets" });
     expect(out).toEqual({ id: "new1", name: "Acme" });
+  });
+
+  it("updates a client with a PATCH and the JSON patch", async () => {
+    const { result } = renderHook(() => useUpdateClient("c1"), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ industry: null, status: "active" });
+    });
+    expect(calls[0].path).toBe("/clients/c1");
+    expect(calls[0].init?.method).toBe("PATCH");
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({ industry: null, status: "active" });
+  });
+
+  it("archives a client with a DELETE", async () => {
+    const { result } = renderHook(() => useArchiveClient("c1"), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+    expect(calls[0].path).toBe("/clients/c1");
+    expect(calls[0].init?.method).toBe("DELETE");
   });
 });

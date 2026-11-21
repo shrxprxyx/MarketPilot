@@ -35,3 +35,30 @@ export function useCreateClient() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["clients"] }),
   });
 }
+
+export type ClientPatch = {
+  name?: string;
+  website_url?: string | null;
+  industry?: string | null;
+  goals?: string[] | null;
+  status?: "active" | "archived";
+};
+
+// ["clients"] is a prefix of both the list and the detail keys, so one invalidation refreshes both.
+export function useUpdateClient(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (patch: ClientPatch) =>
+      apiFetch<Client>(`/clients/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clients"] }),
+  });
+}
+
+/** The API archives (soft delete); restoring is useUpdateClient with { status: "active" }. */
+export function useArchiveClient(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<void>(`/clients/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clients"] }),
+  });
+}
