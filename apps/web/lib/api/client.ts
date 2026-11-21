@@ -3,7 +3,8 @@ import { ApiError, networkError, parseProblem } from "@/lib/api/problem";
 
 async function send(path: string, init: RequestInit = {}, token?: string | null) {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) {
+  // FormData must keep the browser-generated multipart content type (it carries the boundary).
+  if (init.body && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
   if (token) headers.set("authorization", `Bearer ${token}`);

@@ -42,6 +42,34 @@ describe("apiFetch", () => {
     expect(m.calls[0].auth).toBe("Bearer tok");
   });
 
+  it("leaves the content type to the browser for FormData so the multipart boundary survives", async () => {
+    useSession.getState().setSession("tok", me as never);
+    let type: string | null = null;
+    mockFetch({
+      "POST /api/upload": (req) => {
+        type = req.headers.get("content-type");
+        return json({ ok: true });
+      },
+    });
+    const form = new FormData();
+    form.append("file", new File(["hello"], "a.txt", { type: "text/plain" }));
+    await apiFetch("/upload", { method: "POST", body: form });
+    expect(type).toMatch(/^multipart\/form-data; boundary=/);
+  });
+
+  it("still sends application/json for a string body", async () => {
+    useSession.getState().setSession("tok", me as never);
+    let type: string | null = null;
+    mockFetch({
+      "POST /api/things": (req) => {
+        type = req.headers.get("content-type");
+        return json({ ok: true });
+      },
+    });
+    await apiFetch("/things", { method: "POST", body: JSON.stringify({ a: 1 }) });
+    expect(type).toBe("application/json");
+  });
+
   it("returns undefined for a 204 response", async () => {
     useSession.getState().setSession("tok", me as never);
     mockFetch({ "DELETE /api/clients/1": () => new Response(null, { status: 204 }) });
