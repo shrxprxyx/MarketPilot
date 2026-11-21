@@ -45,7 +45,10 @@ export function DailyCostChart({
 
   // If nothing has a price, cost would be a flat zero line: plot calls instead.
   const byCalls = t.cost === 0;
-  const series = fillDays(rows, days);
+  // The API window (created_at >= now - days) touches days + 1 calendar days; drawing fewer
+  // would drop the oldest day and make the bars add up to less than the stated total.
+  const buckets = days + 1;
+  const series = fillDays(rows, buckets);
   const value = (r: UsageRow) => (byCalls ? r.calls : Number(r.cost_usd));
   const fmt = (n: number) => (byCalls ? `${n} ${n === 1 ? "call" : "calls"}` : formatCost(n));
   const values = series.map(value);
@@ -57,7 +60,7 @@ export function DailyCostChart({
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
   const base = PAD.top + plotH;
-  const slot = plotW / days;
+  const slot = plotW / buckets;
   const barW = Math.max(1, Math.min(MAX_BAR, slot - GAP));
   const shown = active ?? peakIndex;
 
@@ -135,7 +138,7 @@ export function DailyCostChart({
             </g>
           );
         })}
-        {[0, Math.floor((days - 1) / 2), days - 1].map((i, n) => (
+        {[0, Math.floor((buckets - 1) / 2), buckets - 1].map((i, n) => (
           <text
             key={n}
             x={PAD.left + i * slot + slot / 2}
