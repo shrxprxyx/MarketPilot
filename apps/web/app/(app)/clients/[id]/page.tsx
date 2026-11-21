@@ -1,12 +1,18 @@
-import { ComingNext } from "@/components/coming-next";
+import { Suspense } from "react";
+import { ClientPage } from "@/components/clients/client-page";
 
 export const metadata = { title: "Client · MarketPilot" };
 
-export default function ClientPage() {
+// `params` is a Promise in Next 16; with cacheComponents it must be awaited inside Suspense.
+async function ClientRoute({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return <ClientPage id={id} />;
+}
+
+export default function Page({ params }: { params: Promise<{ id: string }> }) {
   return (
-    <ComingNext
-      title="Client"
-      description="The client profile, brand voice and knowledge documents will live here."
-    />
+    <Suspense fallback={null}>
+      <ClientRoute params={params} />
+    </Suspense>
   );
 }
