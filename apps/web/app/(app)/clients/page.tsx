@@ -1,12 +1,7 @@
-import { ComingNext } from "@/components/coming-next";
+import { ClientsList } from "@/components/clients/clients-list";
 
 export const metadata = { title: "Clients · MarketPilot" };
 
 export default function Page() {
-  return (
-    <ComingNext
-      title="Clients"
-      description="Manage your clients, their brand profiles and knowledge documents."
-    />
-  );
+  return <ClientsList />;
 }
