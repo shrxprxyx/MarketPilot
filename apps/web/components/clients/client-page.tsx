@@ -4,6 +4,7 @@ import Link from "next/link";
 import { BrandProfileForm } from "@/components/clients/brand-profile-form";
 import { ClientOverview } from "@/components/clients/client-overview";
 import { KnowledgeSection } from "@/components/knowledge/knowledge-section";
+import { StrategySection } from "@/components/strategy/strategy-section";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -64,6 +65,7 @@ export function ClientPage({ id }: { id: string }) {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="brand">Brand profile</TabsTrigger>
           <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
+          <TabsTrigger value="strategy">Strategy</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="pt-6">
           <ClientOverview client={client} />
@@ -73,6 +75,9 @@ export function ClientPage({ id }: { id: string }) {
         </TabsContent>
         <TabsContent value="knowledge" className="pt-6">
           <KnowledgeSection clientId={client.id} />
+        </TabsContent>
+        <TabsContent value="strategy" className="pt-6">
+          <StrategySection clientId={client.id} />
         </TabsContent>
       </Tabs>
     </div>
