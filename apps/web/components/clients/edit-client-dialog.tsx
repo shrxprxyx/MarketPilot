@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { TextareaField } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/problem";
+import { fromList, toList } from "@/lib/lines";
 import { useUpdateClient, type Client } from "@/lib/queries/clients";
 
 // Mirrors ClientPatch in apps/api/app/api/v1/clients.py; "" means "cleared".
@@ -36,14 +37,8 @@ const defaultsOf = (c: Client): Values => ({
   name: c.name,
   website_url: c.website_url ?? "",
   industry: c.industry ?? "",
-  goals: (c.goals ?? []).join("\n"),
+  goals: fromList(c.goals),
 });
-
-/** One item per line; blanks dropped. An empty list is sent as null so the value is removed. */
-const toList = (text: string) => {
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-  return lines.length > 0 ? lines : null;
-};
 
 export function EditClientDialog({ client }: { client: Client }) {
   const update = useUpdateClient(client.id);
