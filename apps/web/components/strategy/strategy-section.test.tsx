@@ -46,6 +46,27 @@ vi.mock("@/lib/queries/strategies", () => ({
   useGenerateStrategy: () => ({ mutateAsync: (...a: unknown[]) => generate(...a), isPending: pending }),
 }));
 
+let budget: Record<string, unknown> | undefined;
+let estimate: { data?: Record<string, unknown>; isError?: boolean } = {};
+const estimateArgs: [string, string, boolean][] = [];
+vi.mock("@/lib/queries/budget", () => ({
+  useBudget: () => ({ data: budget, isLoading: false, isError: false }),
+  useEstimate: (clientId: string, month: string, enabled: boolean) => {
+    estimateArgs.push([clientId, month, enabled]);
+    return estimate;
+  },
+}));
+
+const budgetState = (over = {}) => ({
+  monthly_budget_usd: "50.00",
+  hard_stop: true,
+  spent_usd: "20.00",
+  percent_used: 40,
+  unpriced_calls: 0,
+  month: "2026-11",
+  ...over,
+});
+
 function as(role: Role) {
   useSession.getState().setSession("t", {
     user_id: "u",
@@ -66,6 +87,9 @@ const thisMonth = () => {
 beforeEach(() => {
   setList([strategy()]);
   pending = false;
+  budget = undefined;
+  estimate = {};
+  estimateArgs.length = 0;
   generate.mockReset();
   useSession.getState().clear();
 });
@@ -208,6 +232,78 @@ describe("generating", () => {
     await userEvent.click(screen.getByRole("button", { name: "Generate strategy" }));
     expect(await screen.findByText("The model call failed.")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Open AI models" })).not.toBeInTheDocument();
+  });
+});
+
+describe("budget and estimate", () => {
+  it("shows the spend bar above the controls when a budget is set", () => {
+    as("manager");
+    budget = budgetState();
+    render(<StrategySection clientId="c1" />);
+    expect(screen.getByRole("progressbar", { name: "Monthly AI budget used" })).toBeInTheDocument();
+  });
+
+  it("disables Generate with an explanation when the hard stop has been reached", () => {
+    as("manager");
+    budget = budgetState({ percent_used: 100, spent_usd: "50.00" });
+    render(<StrategySection clientId="c1" />);
+    expect(screen.getByRole("button", { name: "Generate strategy" })).toBeDisabled();
+    expect(screen.getByText(/monthly budget reached/i)).toBeInTheDocument();
+    expect(estimateArgs.at(-1)?.[2]).toBe(false); // no point estimating a blocked job
+  });
+
+  it("keeps Generate enabled at 100% when there is no hard stop (warning only)", () => {
+    as("manager");
+    budget = budgetState({ hard_stop: false, percent_used: 120, spent_usd: "60.00" });
+    render(<StrategySection clientId="c1" />);
+    expect(screen.getByRole("button", { name: "Generate strategy" })).toBeEnabled();
+  });
+
+  it("shows a pre-flight estimate with a maximum cost", () => {
+    as("manager");
+    estimate = { data: { tokens_in_est: 3200, tokens_out_max: 2048, cost_max_usd: "0.0417", model: "m" } };
+    render(<StrategySection clientId="c1" />);
+    expect(screen.getByText("Estimated up to $0.0417 · about 3,200 tokens in")).toBeInTheDocument();
+    expect(estimateArgs.at(-1)).toEqual(["c1", thisMonth(), true]);
+  });
+
+  it("says the cost is unknown for an unpriced model, not $0", () => {
+    as("manager");
+    estimate = { data: { tokens_in_est: 900, tokens_out_max: 2048, cost_max_usd: null, model: "m" } };
+    render(<StrategySection clientId="c1" />);
+    expect(screen.getByText("Cost unknown for this model · about 900 tokens in")).toBeInTheDocument();
+  });
+
+  it("shows no estimate line when the estimate is unavailable", () => {
+    as("manager");
+    estimate = { isError: true };
+    render(<StrategySection clientId="c1" />);
+    expect(screen.queryByText(/estimated up to|cost unknown for this model/i)).not.toBeInTheDocument();
+  });
+
+  it("estimates for the month the user picks", async () => {
+    as("manager");
+    render(<StrategySection clientId="c1" />);
+    const month = screen.getByLabelText("Month");
+    await userEvent.clear(month);
+    await userEvent.type(month, "2027-03");
+    expect(estimateArgs.at(-1)).toEqual(["c1", "2027-03", true]);
+  });
+
+  it("shows the 402 message when generation is refused", async () => {
+    as("manager");
+    generate.mockRejectedValue(
+      new ApiError(402, "Payment Required", "Monthly AI budget reached. An admin can raise it in AI models."),
+    );
+    render(<StrategySection clientId="c1" />);
+    await userEvent.click(screen.getByRole("button", { name: "Generate strategy" }));
+    expect(await screen.findByText(/An admin can raise it in AI models/)).toBeInTheDocument();
+  });
+
+  it("never requests an estimate for members", () => {
+    as("member");
+    render(<StrategySection clientId="c1" />);
+    expect(estimateArgs.every(([, , enabled]) => enabled === false)).toBe(true);
   });
 });
 

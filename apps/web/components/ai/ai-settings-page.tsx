@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { BudgetSection } from "@/components/budget/budget-section";
 import { ConnectionsSection } from "@/components/ai/connections-section";
 import { RoutingSection } from "@/components/ai/routing-section";
 import { useSession } from "@/lib/auth/session-store";
@@ -38,6 +39,7 @@ export function AiSettingsPage() {
         <>
           <ConnectionsSection testedModels={testedModels} onTested={onTested} />
           <RoutingSection testedModels={testedModels} />
+          <BudgetSection />
         </>
       )}
     </div>

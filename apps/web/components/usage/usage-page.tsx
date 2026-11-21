@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { SpendBar } from "@/components/budget/spend-bar";
 import { BreakdownTable } from "@/components/usage/breakdown-table";
 import { DailyCostChart } from "@/components/usage/daily-cost-chart";
 import { UsageSummary } from "@/components/usage/usage-summary";
 import { useSession } from "@/lib/auth/session-store";
 import { useAiUsageBy } from "@/lib/queries/ai";
+import { useBudget } from "@/lib/queries/budget";
 import { useClients } from "@/lib/queries/clients";
 import { totals } from "@/lib/usage";
 
@@ -23,6 +25,7 @@ export function UsagePage() {
   const task = useAiUsageBy("task", days, canView);
   const model = useAiUsageBy("model", days, canView);
   const clients = useClients(100);
+  const budget = useBudget(canView);
 
   if (!role) return null;
 
@@ -63,6 +66,8 @@ export function UsagePage() {
           </div>
         )}
       </header>
+
+      {canView && <SpendBar budget={budget.data} />}
 
       {!canView ? (
         <p className="border-y py-10 text-sm text-muted-foreground">

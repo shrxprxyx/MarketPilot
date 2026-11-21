@@ -21,6 +21,10 @@ vi.mock("@/components/ai/routing-section", () => ({
   },
 }));
 
+vi.mock("@/components/budget/budget-section", () => ({
+  BudgetSection: () => <div>budget-section</div>,
+}));
+
 function as(role: Role) {
   useSession.getState().setSession("t", {
     user_id: "u",
@@ -42,6 +46,7 @@ describe("AiSettingsPage", () => {
     render(<AiSettingsPage />);
     expect(screen.getByText(/only admins and managers/i)).toBeInTheDocument();
     expect(screen.queryByText("connections-section")).not.toBeInTheDocument();
+    expect(screen.queryByText("budget-section")).not.toBeInTheDocument();
     expect(enabledFlags).toHaveLength(0);
   });
 
@@ -51,6 +56,7 @@ describe("AiSettingsPage", () => {
     expect(screen.getByRole("heading", { name: "AI models" })).toBeInTheDocument();
     expect(screen.getByText("connections-section")).toBeInTheDocument();
     expect(screen.getByText("routing-section")).toBeInTheDocument();
+    expect(screen.getByText("budget-section")).toBeInTheDocument();
   });
 
   it("shares tested model names from Connections with Routing", async () => {

@@ -47,6 +47,9 @@ export function useGenerateStrategy(clientId: string) {
         method: "POST",
         body: JSON.stringify(v),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["strategies", clientId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["strategies", clientId] });
+      qc.invalidateQueries({ queryKey: ["budget"] }); // a new call changes this month's spend
+    },
   });
 }

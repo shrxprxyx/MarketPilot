@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Field, FormError } from "@/components/auth/auth-card";
+import { SpendBar } from "@/components/budget/spend-bar";
 import { StrategyView } from "@/components/strategy/strategy-view";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/problem";
 import { useSession } from "@/lib/auth/session-store";
+import { useBudget, useEstimate } from "@/lib/queries/budget";
+import { formatCost } from "@/lib/usage";
 import { useGenerateStrategy, useStrategies, type Strategy } from "@/lib/queries/strategies";
 
 const currentMonth = () => {
@@ -20,7 +23,11 @@ export function StrategySection({ clientId }: { clientId: string }) {
   const canWrite = role === "admin" || role === "manager";
   const { data, isLoading, isError } = useStrategies(clientId);
   const generate = useGenerateStrategy(clientId);
+  const budget = useBudget(canWrite).data;
   const [month, setMonth] = useState(currentMonth);
+  // Only a hard stop blocks; otherwise the bar warns and generation stays available.
+  const blocked = !!budget?.hard_stop && budget.percent_used !== null && budget.percent_used >= 100;
+  const estimate = useEstimate(clientId, month, canWrite && !blocked).data;
   const [picked, setPicked] = useState<Strategy | null>(null);
   const [error, setError] = useState<{ status: number; detail: string } | null>(null);
 
@@ -48,6 +55,8 @@ export function StrategySection({ clientId }: { clientId: string }) {
         knowledge, with the sources it used.
       </p>
 
+      {canWrite && <SpendBar budget={budget} />}
+
       {canWrite && (
         <div className="flex flex-wrap items-end gap-4">
           <div className="w-44">
@@ -61,12 +70,26 @@ export function StrategySection({ clientId }: { clientId: string }) {
           </div>
           <Button
             className="h-11 cursor-pointer px-4"
-            disabled={generate.isPending || !month}
+            disabled={generate.isPending || !month || blocked}
             onClick={run}
           >
             {generate.isPending ? "Generating…" : hasMonth ? "Regenerate" : "Generate strategy"}
           </Button>
         </div>
+      )}
+      {canWrite && blocked && (
+        <p className="text-sm text-muted-foreground">
+          Monthly budget reached. An admin can raise it in AI models.
+        </p>
+      )}
+      {canWrite && !blocked && estimate && (
+        <p className="text-sm text-muted-foreground">
+          {`${
+            estimate.cost_max_usd === null
+              ? "Cost unknown for this model"
+              : `Estimated up to ${formatCost(estimate.cost_max_usd)}`
+          } · about ${estimate.tokens_in_est.toLocaleString("en-US")} tokens in`}
+        </p>
       )}
       <div role="status" className="text-sm text-muted-foreground">
         {generate.isPending && "Generating your strategy. This can take up to a minute."}

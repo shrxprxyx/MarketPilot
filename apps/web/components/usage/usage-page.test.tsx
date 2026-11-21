@@ -22,6 +22,14 @@ vi.mock("@/lib/queries/ai", () => ({
     return { data: data[group] ?? [], isLoading: false, isError: false };
   },
 }));
+let budget: Record<string, unknown> | undefined;
+const budgetFlags: boolean[] = [];
+vi.mock("@/lib/queries/budget", () => ({
+  useBudget: (enabled: boolean) => {
+    budgetFlags.push(enabled);
+    return { data: budget, isLoading: false, isError: false };
+  },
+}));
 vi.mock("@/lib/queries/clients", () => ({
   useClients: () => ({
     data: { items: [{ id: "c1", name: "Acme" }], next_cursor: null },
@@ -42,6 +50,8 @@ function as(role: Role) {
 
 beforeEach(() => {
   calls = [];
+  budget = undefined;
+  budgetFlags.length = 0;
   data = {
     day: [r(today)],
     client: [r("c1"), r(null), r("gone-id")],
@@ -69,6 +79,29 @@ describe("UsagePage", () => {
     expect(screen.getByRole("heading", { name: "Usage" })).toBeInTheDocument();
     expect(screen.getByText("strategy")).toBeInTheDocument();
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
+  });
+
+  it("shows the spend bar when a budget is set, and nothing when it is not", () => {
+    as("admin");
+    const { rerender } = render(<UsagePage />);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    budget = {
+      monthly_budget_usd: "50.00",
+      hard_stop: false,
+      spent_usd: "42.50",
+      percent_used: 85,
+      unpriced_calls: 0,
+      month: "2026-11",
+    };
+    rerender(<UsagePage />);
+    expect(screen.getByRole("progressbar", { name: "Monthly AI budget used" })).toBeInTheDocument();
+    expect(screen.getByText("85% of budget used")).toBeInTheDocument();
+  });
+
+  it("does not request the budget for members", () => {
+    as("member");
+    render(<UsagePage />);
+    expect(budgetFlags.every((e) => e === false)).toBe(true);
   });
 
   it("re-queries every grouping when the range changes", async () => {
