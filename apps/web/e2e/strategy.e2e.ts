@@ -61,7 +61,9 @@ test("strategy runs on the tenant's own model with sources and cost", async ({ p
     await expect(panel.getByText("stub-model", { exact: true })).toBeVisible();
     await expect(panel.getByText(/321 in/)).toBeVisible();
     await expect(panel.getByText(/123 out/)).toBeVisible();
-    await expect(panel.getByText("Cost unknown")).toBeVisible(); // unpriced model, not $0
+    await expect(panel.getByText("Cost unknown", { exact: true })).toBeVisible(); // unpriced, not $0
+    // The pre-flight estimate line is also shown, and says the same for an unpriced model.
+    await expect(panel.getByText(/^Cost unknown for this model · about [\d,]+ tokens in$/)).toBeVisible();
     await page.screenshot({ path: "test-results/shots/strategy.png", fullPage: true });
 
     // The model really received the brand's knowledge and the client facts in its prompt.
