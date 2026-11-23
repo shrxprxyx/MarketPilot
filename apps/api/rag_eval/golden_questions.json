@@ -1,0 +1,20 @@
+[
+  {"question": "How much does standard shipping cost and when is it free?", "expected": "shipping-delivery.md"},
+  {"question": "Do you deliver outside North America?", "expected": "shipping-delivery.md"},
+  {"question": "My parcel turned up broken, what happens now?", "expected": "shipping-delivery.md"},
+  {"question": "Can I stop my regular coffee deliveries for a while?", "expected": "subscriptions.md"},
+  {"question": "What is the price of the weekly plan?", "expected": "subscriptions.md"},
+  {"question": "I run a cafe and want to buy beans in bulk", "expected": "wholesale.md"},
+  {"question": "Is there training for baristas if I become a partner?", "expected": "wholesale.md"},
+  {"question": "Where do the beans come from and are the farmers paid fairly?", "expected": "sourcing-sustainability.md"},
+  {"question": "Is the packaging eco friendly?", "expected": "sourcing-sustainability.md"},
+  {"question": "I don't like my coffee, can I get my money back?", "expected": "returns-refunds.md"},
+  {"question": "How long do refunds take to show up?", "expected": "returns-refunds.md"},
+  {"question": "How often should we post on Instagram and TikTok?", "expected": "social-media-guidelines.md"},
+  {"question": "Which hashtags should the brand use?", "expected": "social-media-guidelines.md"},
+  {"question": "What tone should our captions have?", "expected": "brand-voice.md"},
+  {"question": "Which words should writers never use in copy?", "expected": "brand-voice.md"},
+  {"question": "Is the coffee safe for someone with a nut allergy?", "expected": "allergens-faq.md"},
+  {"question": "How do I keep the beans fresh once the bag is open?", "expected": "allergens-faq.md"},
+  {"question": "How is the decaf made?", "expected": "allergens-faq.md"}
+]
