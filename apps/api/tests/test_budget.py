@@ -306,6 +306,74 @@ def test_lowering_budget_below_spend_blocks_next_call(
     assert _generate(t).status_code == 402
 
 
+# ---------- unpriced models under a hard stop ----------
+
+
+def _route_with_fallback(t: Tenant, model: str, fallback_model: str) -> None:
+    conn = client.post(
+        "/api/v1/ai/connections",
+        json={"provider": "openai", "label": "fb", "api_key": "sk-fallback-key-1234"},
+        headers=_auth(t.token),
+    ).json()["id"]
+    routes = client.get("/api/v1/ai/routes", headers=_auth(t.token)).json()
+    body = [
+        {
+            "task_type": "strategy",
+            "connection_id": routes[0]["connection_id"],
+            "model": model,
+            "fallback_connection_id": conn,
+            "fallback_model": fallback_model,
+        }
+    ]
+    assert client.put("/api/v1/ai/routes", json=body, headers=_auth(t.token)).status_code == 200
+
+
+def test_hard_stop_refuses_an_unpriced_model(provider_calls: list[dict[str, Any]]) -> None:
+    t = _tenant(model="some-unpriced-model")
+    _set_budget(t, 5, hard_stop=True)
+    rows = _usage_rows(t.id)
+    r = _generate(t)
+    assert r.status_code == 409, r.text
+    assert "no known price" in r.json()["detail"]
+    assert provider_calls == [] and _usage_rows(t.id) == rows  # never called, nothing recorded
+
+
+def test_unpriced_model_is_allowed_without_hard_stop(
+    provider_calls: list[dict[str, Any]],
+) -> None:
+    t = _tenant(model="some-unpriced-model")
+    _set_budget(t, 5, hard_stop=False)
+    assert _generate(t).status_code == 201
+    assert _budget(t.token).json()["unpriced_calls"] == 1
+
+
+def test_hard_stop_falls_back_to_a_priced_model(provider_calls: list[dict[str, Any]]) -> None:
+    t = _tenant(model="some-unpriced-model")
+    _route_with_fallback(t, "some-unpriced-model", "gpt-4o-mini")
+    _set_budget(t, 5, hard_stop=True)
+    r = _generate(t)
+    assert r.status_code == 201, r.text
+    assert r.json()["model_used"] == "gpt-4o-mini"
+    assert r.json()["cost_usd"] is not None
+
+
+def test_anthropic_models_are_priced() -> None:
+    async def _prices() -> dict[str, tuple[Decimal, Decimal]]:
+        async with db_engine.AsyncSessionLocal() as session:
+            return {
+                m: await gateway._price(session, "anthropic", m)  # type: ignore[misc]
+                for m in ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5")
+            }
+
+    prices = asyncio.run(_prices())
+    assert prices["claude-sonnet-5-5"] == (Decimal("2"), Decimal("10"))
+    assert prices["claude-opus-5-5"] == (Decimal("4"), Decimal("20"))
+    assert prices["claude-haiku-5-5"] == (Decimal("0.1"), Decimal("0.5"))
+    # 1M input + 1M output tokens on Sonnet 5.5 = $2 + $10
+    cost = gateway.compute_cost(prices["claude-sonnet-5-5"], 1_000_000, 1_000_000)
+    assert cost == Decimal(12)
+
+
 # ---------- estimate ----------
 
 

@@ -95,11 +95,23 @@ test("budget: warning, hard stop, server-side enforcement and recovery", async (
     expect(stub.requests).toHaveLength(1);
     expect(sql(`SELECT count(*) FROM usage_logs WHERE tenant_id = '${tenantId}'`)).toBe(rowsBefore);
 
-    // 5. Raising the budget restores generation; clearing it removes the bar entirely.
+    // 5. Raising the budget restores the budget check, but a hard stop cannot be enforced for
+    //    a model with no known price (its spend is never counted), so the server refuses
+    //    that too: 409, no model call, no new usage row.
     await setBudget("5", true);
     await openStrategy();
     await expect(generate).toBeEnabled();
     await expect(panel.getByText("3% used")).toBeVisible();
+    await generate.click();
+    await expect(panel.getByRole("alert")).toContainText("no known price");
+    expect(stub.requests).toHaveLength(1);
+    expect(sql(`SELECT count(*) FROM usage_logs WHERE tenant_id = '${tenantId}'`)).toBe(rowsBefore);
+
+    // Once the model has a price the same request goes through and its cost is recorded.
+    sql(
+      `INSERT INTO model_pricing (id,provider,model,input_per_mtok,output_per_mtok) ` +
+        `VALUES (gen_random_uuid(),'openai_compatible','stub-model',1,1) ON CONFLICT DO NOTHING`,
+    );
     await generate.click();
     await expect(panel.getByRole("button", { name: /v2$/ })).toBeVisible();
     expect(stub.requests).toHaveLength(2);
@@ -112,6 +124,7 @@ test("budget: warning, hard stop, server-side enforcement and recovery", async (
     await expect(page.getByLabel("Monthly budget (USD)")).toHaveValue("");
     await expect(bar).toHaveCount(0);
   } finally {
+    sql(`DELETE FROM model_pricing WHERE provider = 'openai_compatible' AND model = 'stub-model'`);
     await stub.close();
   }
 });

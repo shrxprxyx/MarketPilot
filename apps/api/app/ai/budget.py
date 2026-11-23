@@ -51,9 +51,17 @@ async def get_budget_status(db: AsyncSession, tenant_id: UUID) -> BudgetStatus:
     )
 
 
+async def hard_stop_active(db: AsyncSession, tenant_id: UUID) -> bool:
+    """True when the tenant has a monthly budget with the hard stop switched on."""
+    tenant = await db.get(Tenant, tenant_id)
+    return bool(tenant and tenant.monthly_budget_usd is not None and tenant.hard_stop)
+
+
 async def hard_stop_reached(db: AsyncSession, tenant_id: UUID) -> bool:
     """Cheap pre-call check: tenants without a hard-stopped budget never pay for the
-    spend aggregate."""
+    spend aggregate. The check happens before the call and the call's own cost is only known
+    afterwards, so the call that crosses the limit, and any requests already in flight when
+    it is crossed, can overshoot the budget slightly. The next call is refused."""
     tenant = await db.get(Tenant, tenant_id)
     if tenant is None or tenant.monthly_budget_usd is None or not tenant.hard_stop:
         return False
