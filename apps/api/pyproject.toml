@@ -1,8 +1,8 @@
+
 [project]
 name = "api"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
 authors = [
     { name = "shrxprxyx", email = "shripriya.sriram1@gmail.com" }
 ]
