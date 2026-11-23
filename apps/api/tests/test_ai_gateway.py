@@ -5,6 +5,7 @@ Provider HTTP is mocked at app.ai.providers._post_json; the gateway, routing,
 pricing and usage rows all run against the real database.
 """
 import asyncio
+import time
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -315,6 +316,93 @@ def test_gateway_rejects_persistently_invalid_output(
         )
 
 
+def _usage_totals(tenant_id: UUID) -> tuple[int, int, int]:
+    async def _go() -> tuple[int, int, int]:
+        async with db_engine.AsyncSessionLocal() as session:
+            await set_rls_context(session, tenant_id=tenant_id)
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT count(*), coalesce(sum(tokens_in), 0), coalesce(sum(tokens_out), 0)"
+                        " FROM usage_logs"
+                    )
+                )
+            ).one()
+            return int(row[0]), int(row[1]), int(row[2])
+
+    return asyncio.run(_go())
+
+
+def test_gateway_repairs_invalid_output_with_feedback_and_sums_tokens(
+    admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn_id = _conn(admin_token)
+    _route(admin_token, conn_id, task="strategy")
+    replies = iter(["not json", '{"title": 1}', '{"title": "Q1", "steps": ["a"]}'])  # 2 repairs
+    bodies: list[dict[str, Any]] = []
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        bodies.append(body)
+        return _openai_reply(next(replies), tin=100, tout=10)
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    rows, tin, tout = _usage_totals(tenant_id)
+    result = _run_gateway(
+        tenant_id, task="strategy", messages=[{"role": "user", "content": "x"}], schema=Plan
+    )
+    assert isinstance(result.parsed, Plan) and len(bodies) == 3
+    # The retry tells the model what was wrong and shows it its own invalid reply.
+    retry_messages = bodies[1]["messages"]
+    assert {"role": "assistant", "content": "not json"} in retry_messages
+    feedback = next(m["content"] for m in retry_messages if "did not match" in m["content"])
+    assert "valid JSON" in feedback
+    # Usage counts every attempt, in one row.
+    assert (result.tokens_in, result.tokens_out) == (300, 30)
+    assert _usage_totals(tenant_id) == (rows + 1, tin + 300, tout + 30)
+
+
+def test_gateway_records_tokens_spent_on_persistently_invalid_output(
+    admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn_id = _conn(admin_token)
+    _route(admin_token, conn_id, task="strategy")
+    calls: list[int] = []
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        calls.append(1)
+        return _openai_reply("still not json", tin=100, tout=10)
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    rows, tin, tout = _usage_totals(tenant_id)
+    with pytest.raises(gateway.GatewayError, match="does not match the schema"):
+        _run_gateway(
+            tenant_id, task="strategy", messages=[{"role": "user", "content": "x"}], schema=Plan
+        )
+    assert len(calls) == 3  # first try + 2 repair retries, then give up
+    # The failed request is not committed by the caller, but its spend is still recorded.
+    assert _usage_totals(tenant_id) == (rows + 1, tin + 300, tout + 30)
+
+
+def test_gateway_gives_up_after_the_overall_deadline(
+    admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn_id = _conn(admin_token)
+    _route(admin_token, conn_id, task="strategy")
+
+    async def slow_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        await asyncio.sleep(30)  # a provider that never answers
+        return _openai_reply("late")
+
+    monkeypatch.setattr(providers, "_post_json", slow_post)
+    monkeypatch.setattr(gateway, "GATEWAY_DEADLINE_SECONDS", 0.3)
+    rows = _usage_totals(tenant_id)
+    started = time.monotonic()
+    with pytest.raises(gateway.GatewayError, match="did not answer in time"):
+        _run_gateway(tenant_id, task="strategy", messages=[{"role": "user", "content": "x"}])
+    assert time.monotonic() - started < 5  # returned at the deadline, not after 30 seconds
+    assert _usage_totals(tenant_id) == rows  # nothing was billed or recorded
+
+
 def test_anthropic_adapter_uses_forced_tool_call(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
@@ -340,11 +428,81 @@ def test_anthropic_adapter_uses_forced_tool_call(monkeypatch: pytest.MonkeyPatch
             json_schema=Plan.model_json_schema(),
         )
     )
-    assert seen["body"]["system"] == "be brief"
-    assert seen["body"]["tool_choice"] == {"type": "tool", "name": "respond"}
+    assert seen["body"]["system"].startswith("be brief")
+    assert "`respond` tool" in seen["body"]["system"]
+    assert seen["body"]["tool_choice"] == {"type": "auto"}  # forced tool_choice 400s on new models
     assert all(m["role"] != "system" for m in seen["body"]["messages"])
     assert Plan.model_validate_json(out.text).title == "T"
     assert (out.tokens_in, out.tokens_out) == (7, 3)
+
+
+def _anthropic_body(model: str, temperature: float, monkeypatch: pytest.MonkeyPatch) -> Any:
+    seen: dict[str, Any] = {}
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        seen.update(body)
+        return {"content": [{"type": "text", "text": "ok"}], "usage": {}}
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    asyncio.run(
+        providers.AnthropicAdapter().complete(
+            base_url=None,
+            api_key="k",
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=temperature,
+            max_tokens=50,
+            json_schema=None,
+        )
+    )
+    return seen
+
+
+def test_anthropic_temperature_is_clamped_to_its_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _anthropic_body("claude-sonnet-4-6", 1.8, monkeypatch)["temperature"] == 1.0
+    assert _anthropic_body("claude-sonnet-4-6", 0.3, monkeypatch)["temperature"] == 0.3
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-fable-5-2",
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-5-5",
+    ],
+)
+def test_anthropic_omits_temperature_for_models_that_reject_it(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert "temperature" not in _anthropic_body(model, 0.7, monkeypatch)
+
+
+def test_anthropic_plain_text_reply_is_returned_for_schema_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        return {
+            "content": [{"type": "text", "text": '{"title": "T", "steps": []}'}],
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    out = asyncio.run(
+        providers.AnthropicAdapter().complete(
+            base_url=None,
+            api_key="k",
+            model="claude-opus-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.7,
+            max_tokens=50,
+            json_schema=Plan.model_json_schema(),
+        )
+    )
+    assert Plan.model_validate_json(out.text).title == "T"  # no tool_use block, no crash
 
 
 def test_usage_is_tenant_scoped(admin_token: str) -> None:
