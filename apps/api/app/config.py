@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     fernet_keys: str
     allowed_origins: str = "http://localhost:3000"
     app_user_db_password: str = "app_user_dev_password"
+    # Model-provider base URLs (Ollama, OpenAI-compatible) pointing at loopback or private
+    # networks are refused unless this is on. Turn it on for a self-hosted or local setup.
+    allow_private_base_urls: bool = False
 
     @property
     def cors_origins(self) -> list[str]:
