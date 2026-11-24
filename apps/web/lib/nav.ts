@@ -26,6 +26,10 @@ const SECTIONS: {
       { label: "Usage", href: "/usage", roles: MANAGERS },
     ],
   },
+  {
+    label: "C · SETTINGS",
+    items: [{ label: "Agency", href: "/settings/agency", roles: ["admin"] }],
+  },
 ];
 
 /** Sections and items a role may see, numbered continuously (01, 02, ...). */

@@ -17,13 +17,24 @@ describe("navFor", () => {
   });
 
   it("shows an admin everything", () => {
-    expect(labels("admin")).toEqual(["Dashboard", "Clients", "Team", "AI models", "Usage"]);
-    expect(navFor("admin").map((s) => s.label)).toEqual(["A · WORKSPACE", "B · AI"]);
+    expect(labels("admin")).toEqual([
+      "Dashboard",
+      "Clients",
+      "Team",
+      "AI models",
+      "Usage",
+      "Agency",
+    ]);
+    expect(navFor("admin").map((s) => s.label)).toEqual([
+      "A · WORKSPACE",
+      "B · AI",
+      "C · SETTINGS",
+    ]);
   });
 
   it("numbers items continuously across sections", () => {
     const numbers = navFor("admin").flatMap((s) => s.items.map((i) => i.number));
-    expect(numbers).toEqual(["01", "02", "03", "04", "05"]);
+    expect(numbers).toEqual(["01", "02", "03", "04", "05", "06"]);
   });
 
   it("numbers a manager's items 01 to 04 with no gap", () => {
