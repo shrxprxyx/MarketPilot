@@ -7,6 +7,7 @@ import {
   usePasteDocument,
   useReindexDocument,
   useUploadDocument,
+  type DocStatus,
   type DocumentList,
 } from "@/lib/queries/documents";
 
@@ -26,7 +27,7 @@ beforeEach(() => {
   calls.length = 0;
 });
 
-const doc = (status: "pending" | "ready" | "failed") => ({
+const doc = (status: DocStatus) => ({
   id: "d",
   client_id: "c1",
   source_type: "upload",
@@ -34,7 +35,7 @@ const doc = (status: "pending" | "ready" | "failed") => ({
   status,
   error: null,
 });
-const list = (...statuses: ("pending" | "ready" | "failed")[]): DocumentList => ({
+const list = (...statuses: DocStatus[]): DocumentList => ({
   items: statuses.map(doc),
   next_cursor: null,
 });
@@ -42,6 +43,10 @@ const list = (...statuses: ("pending" | "ready" | "failed")[]): DocumentList => 
 describe("pollWhilePending", () => {
   it("polls every 2 seconds while any document is pending", () => {
     expect(pollWhilePending(list("ready", "pending"))).toBe(2000);
+  });
+  it("keeps polling while a document is being indexed", () => {
+    // The worker flips pending -> processing; stopping here would freeze the row mid-indexing.
+    expect(pollWhilePending(list("ready", "processing"))).toBe(2000);
   });
   it("stops when nothing is pending", () => {
     expect(pollWhilePending(list("ready", "failed"))).toBe(false);

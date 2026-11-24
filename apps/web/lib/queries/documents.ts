@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
 
-export type DocStatus = "pending" | "ready" | "failed";
+export type DocStatus = "pending" | "processing" | "ready" | "failed";
 
 export type KnowledgeDoc = {
   id: string;
@@ -15,9 +15,14 @@ export type KnowledgeDoc = {
 export type DocumentList = { items: KnowledgeDoc[]; next_cursor: string | null };
 export type AddedDocument = KnowledgeDoc & { duplicate: boolean };
 
-/** Indexing runs in the worker: refetch every 2s while anything is pending, then stop. */
+/**
+ * Indexing runs in the worker: refetch every 2s while anything is queued or being indexed,
+ * then stop. The worker sets "processing" while it runs, so that counts as in flight too.
+ */
 export function pollWhilePending(data: DocumentList | undefined): number | false {
-  return data?.items.some((d) => d.status === "pending") ? 2000 : false;
+  return data?.items.some((d) => d.status === "pending" || d.status === "processing")
+    ? 2000
+    : false;
 }
 
 export function useDocuments(clientId: string) {
