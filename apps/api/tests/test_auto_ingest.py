@@ -87,7 +87,7 @@ def _run_pending_jobs() -> None:
 @pytest.fixture(autouse=True)
 def _capture_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     _jobs.clear()
-    enqueue = lambda t, d: _jobs.append((t, d))  # noqa: E731
+    enqueue = lambda t, d, job_id=None: _jobs.append((t, d))  # noqa: E731
     monkeypatch.setattr(clients_api, "enqueue_ingest", enqueue)
     monkeypatch.setattr(knowledge_api, "enqueue_ingest", enqueue)
 

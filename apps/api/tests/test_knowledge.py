@@ -79,7 +79,9 @@ def _run_pending_jobs() -> None:
 @pytest.fixture(autouse=True)
 def _capture_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     _jobs.clear()
-    monkeypatch.setattr(knowledge_api, "enqueue_ingest", lambda t, d: _jobs.append((t, d)))
+    monkeypatch.setattr(
+        knowledge_api, "enqueue_ingest", lambda t, d, job_id=None: _jobs.append((t, d))
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)

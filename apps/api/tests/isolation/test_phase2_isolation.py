@@ -1,6 +1,6 @@
 """
 DB-level tenant isolation for the Phase 2 tables (FR-TEN-05, SRS §11): ai_connections,
-task_model_routes, documents, document_chunks, usage_logs and strategies. These use the plain
+task_model_routes, documents, document_chunks, usage_logs, strategies and jobs. These use the plain
 tenant_id-only policy; the API-level 404 tests elsewhere do not prove the database enforces it,
 so these run as the non-owner app_user with FORCE RLS, like production.
 """
@@ -21,6 +21,7 @@ from app.db.rls import set_rls_context
 from app.models.ai_connection import AIConnection
 from app.models.client import Client
 from app.models.document import EMBEDDING_DIM, Document, DocumentChunk
+from app.models.job import Job
 from app.models.strategy import Strategy
 from app.models.task_model_route import TaskModelRoute
 from app.models.tenant import Tenant
@@ -88,6 +89,7 @@ def _row(tenant_id: UUID, p: Parents, *, rogue: bool = False) -> dict[str, Calla
             tokens_in=1,
             tokens_out=1,
         ),
+        "jobs": lambda: Job(tenant_id=tenant_id, type="document.index", payload={}),
     }
 
 
