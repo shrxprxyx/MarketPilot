@@ -21,6 +21,7 @@ import {
   type DocStatus,
   type KnowledgeDoc,
 } from "@/lib/queries/documents";
+import type { JobProgress } from "@/lib/queries/job-streams";
 
 const SOURCE_LABELS: Record<string, string> = {
   upload: "Upload",
@@ -45,6 +46,27 @@ function StatusBadge({ status }: { status: DocStatus }) {
   return <Badge variant="secondary">Indexing…</Badge>;
 }
 
+function IndexingProgress({ title, progress, message }: JobProgress & { title: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div
+        role="progressbar"
+        aria-label={`Indexing ${title}`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        className="h-1 w-full overflow-hidden rounded-full bg-white/10"
+      >
+        <div className="h-full bg-emerald-400 transition-[width]" style={{ width: `${progress}%` }} />
+      </div>
+      {/* Announced politely: the stage changes rarely, unlike the percentage. */}
+      <p aria-live="polite" className="text-xs text-muted-foreground">
+        {message ?? "Indexing"}
+      </p>
+    </div>
+  );
+}
+
 const detailOf = (e: unknown) =>
   e instanceof ApiError ? e.detail : "Something went wrong. Please try again.";
 
@@ -52,10 +74,12 @@ export function DocumentRow({
   doc,
   canWrite,
   clientId,
+  progress,
 }: {
   doc: KnowledgeDoc;
   canWrite: boolean;
   clientId: string;
+  progress?: JobProgress; // live, while this document's indexing job is streaming
 }) {
   const reindex = useReindexDocument(clientId);
   const remove = useDeleteDocument(clientId);
@@ -121,6 +145,9 @@ export function DocumentRow({
           )}
         </div>
       </div>
+      {progress && (doc.status === "pending" || doc.status === "processing") && (
+        <IndexingProgress title={doc.title} {...progress} />
+      )}
       {doc.status === "failed" && doc.error && (
         <p className="text-sm text-destructive">{doc.error}</p>
       )}

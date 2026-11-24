@@ -18,6 +18,7 @@ let list: {
   data?: { items: unknown[]; next_cursor: string | null };
   isLoading: boolean;
   isError: boolean;
+  progress?: Record<string, { progress: number; message: string | null }>;
 } = { data: { items: [doc()], next_cursor: null }, isLoading: false, isError: false };
 const upload = vi.fn();
 const paste = vi.fn();
@@ -242,5 +243,35 @@ describe("paste text", () => {
     expect(await screen.findByText("Text is too long.")).toBeInTheDocument();
     expect(screen.getByLabelText("Title")).toHaveValue("Voice notes");
     expect(screen.getByLabelText("Text")).toHaveValue("We are playful.");
+  });
+});
+
+describe("live indexing progress", () => {
+  const indexing = doc({ title: "Big doc", status: "processing" });
+
+  it("shows a progress bar and the current stage while the job streams", () => {
+    as("manager");
+    setList([indexing]);
+    list.progress = { d1: { progress: 45, message: "Embedding 12 passages" } };
+    render(<KnowledgeSection clientId="c1" />);
+    const bar = screen.getByRole("progressbar", { name: "Indexing Big doc" });
+    expect(bar).toHaveAttribute("aria-valuenow", "45");
+    expect(screen.getByText("Embedding 12 passages")).toBeInTheDocument();
+  });
+
+  it("shows only the status badge when nothing is streaming", () => {
+    as("manager");
+    setList([indexing]);
+    render(<KnowledgeSection clientId="c1" />);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.getByText(/Indexing/)).toBeInTheDocument();
+  });
+
+  it("hides a stale bar once the document is ready", () => {
+    as("manager");
+    setList([doc({ title: "Big doc", status: "ready" })]);
+    list.progress = { d1: { progress: 90, message: null } };
+    render(<KnowledgeSection clientId="c1" />);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 });

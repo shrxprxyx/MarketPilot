@@ -11,7 +11,7 @@ const LIMIT = 100;
 export function KnowledgeSection({ clientId }: { clientId: string }) {
   const role = useSession((s) => s.me?.role);
   const canWrite = role === "admin" || role === "manager";
-  const { data, isLoading, isError } = useDocuments(clientId);
+  const { data, isLoading, isError, progress } = useDocuments(clientId);
   const items = data?.items ?? [];
 
   return (
@@ -34,7 +34,13 @@ export function KnowledgeSection({ clientId }: { clientId: string }) {
         <>
           <ul className="divide-y border-y">
             {items.map((d) => (
-              <DocumentRow key={d.id} doc={d} canWrite={canWrite} clientId={clientId} />
+              <DocumentRow
+                key={d.id}
+                doc={d}
+                canWrite={canWrite}
+                clientId={clientId}
+                progress={progress?.[d.id]}
+              />
             ))}
           </ul>
           {data?.next_cursor && (

@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
+  FAST_POLL_MS,
   pollWhilePending,
+  SAFETY_POLL_MS,
   useDeleteDocument,
   useDocuments,
   usePasteDocument,
@@ -52,6 +54,29 @@ describe("pollWhilePending", () => {
     expect(pollWhilePending(list("ready", "failed"))).toBe(false);
     expect(pollWhilePending(list())).toBe(false);
     expect(pollWhilePending(undefined)).toBe(false);
+  });
+});
+
+describe("pollWhilePending with job streams", () => {
+  const items = (...rows: [string, DocStatus][]): DocumentList => ({
+    items: rows.map(([id, status]) => ({ ...doc(status), id })),
+    next_cursor: null,
+  });
+  const live = { progress: 10, message: null };
+
+  it("slows to a safety poll when every in-flight document is streaming", () => {
+    const data = items(["a", "processing"], ["b", "pending"], ["c", "ready"]);
+    expect(pollWhilePending(data, { a: live, b: live })).toBe(SAFETY_POLL_MS);
+  });
+
+  it("keeps polling fast while any in-flight document is not streaming", () => {
+    const data = items(["a", "processing"], ["b", "pending"]);
+    expect(pollWhilePending(data, { a: live })).toBe(FAST_POLL_MS);
+    expect(pollWhilePending(data, {})).toBe(FAST_POLL_MS);
+  });
+
+  it("stops once nothing is in flight, whatever a stream last said", () => {
+    expect(pollWhilePending(items(["a", "ready"]), { a: live })).toBe(false);
   });
 });
 
