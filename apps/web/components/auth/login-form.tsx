@@ -30,7 +30,7 @@ export function LoginForm() {
       footer={
         <>
           New here?{" "}
-          <Link href="/register" className="text-foreground underline-offset-4 hover:underline">
+          <Link href="/register" className="text-foreground underline underline-offset-4">
             Create an agency
           </Link>
         </>

@@ -30,7 +30,7 @@ export function AcceptInviteForm() {
         title="This invite link is invalid"
         description="It may be incomplete, expired, or already used. Ask your agency admin to send a new invite."
         footer={
-          <Link href="/login" className="text-foreground underline-offset-4 hover:underline">
+          <Link href="/login" className="text-foreground underline underline-offset-4">
             Go to sign in
           </Link>
         }

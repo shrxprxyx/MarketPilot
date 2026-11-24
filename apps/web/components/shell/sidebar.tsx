@@ -34,7 +34,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                         : "text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"
                     }`}
                   >
-                    <span className="font-mono text-xs opacity-60">{item.number}</span>
+                    <span className="font-mono text-xs">{item.number}</span>
                     <span>{item.label}</span>
                   </Link>
                 </li>
