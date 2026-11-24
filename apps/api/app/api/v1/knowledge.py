@@ -1,5 +1,7 @@
 """Knowledge base endpoints (FR-RAG-01, 03, 04). Admins and managers manage
 documents (§2.2); every role can list and search them."""
+import hashlib
+import logging
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -13,8 +15,11 @@ from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
 from app.core.pagination import decode_cursor, encode_cursor
+from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
 from app.db.session import get_db
+from app.jobs.progress import update_job
+from app.jobs.service import create_job, replay_or_none, validate_idempotency_key
 from app.models.client import Client
 from app.models.document import Document
 from app.rag.auto_docs import AUTO_SOURCE_TYPES
@@ -28,7 +33,9 @@ from app.rag.extract import (
 from app.rag.queue import enqueue_ingest
 from app.rag.retrieval import search_chunks
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knowledge"])
+INDEX_JOB = "document.index"
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 WRITER = require_role("admin", "manager")
@@ -54,6 +61,11 @@ class DocumentOut(BaseModel):
 
 class UploadOut(DocumentOut):
     duplicate: bool = False
+    job_id: UUID | None = None  # the indexing job; follow it at /jobs/{job_id}/events
+
+
+class ReindexOut(DocumentOut):
+    job_id: UUID | None = None
 
 
 class DocumentListOut(BaseModel):
@@ -123,15 +135,37 @@ async def _read_input(request: Request) -> tuple[str, str, str]:
     return body.title, text, body.source_type
 
 
-@router.post("/clients/{client_id}/documents", response_model=UploadOut, status_code=202)
+@router.post(
+    "/clients/{client_id}/documents",
+    response_model=UploadOut,
+    status_code=202,
+    dependencies=[rate_limit("documents.add", user=30, tenant=120)],
+)
 async def add_document(
     client_id: UUID, request: Request, current: Annotated[CurrentUser, WRITER], db: DB
 ) -> UploadOut:
     """Upload a file (multipart `file`) or paste text (JSON). Indexing runs in the worker."""
     await _client_or_404(db, current, client_id)
+    key = validate_idempotency_key(request.headers.get("Idempotency-Key"))
     title, text, source_type = await _read_input(request)
 
     digest = content_hash(text)
+    # A retried POST with the same Idempotency-Key must not index the content twice.
+    fingerprint = f"{client_id}|{source_type}|{title}|{digest}"
+    request_hash = hashlib.sha256(fingerprint.encode()).hexdigest()
+    replay = await replay_or_none(
+        db, current.tenant_id, key, job_type=INDEX_JOB, request_hash=request_hash
+    )
+    if replay is not None:
+        original = await db.scalar(
+            select(Document).where(Document.id == UUID(replay.payload["document_id"]))
+        )
+        if original is None:
+            raise ProblemException(
+                409, "Conflict", "The document from this request no longer exists."
+            )
+        return UploadOut.model_validate(original).model_copy(update={"job_id": replay.id})
+
     existing = await db.scalar(
         select(Document).where(Document.client_id == client_id, Document.content_hash == digest)
     )
@@ -152,6 +186,19 @@ async def add_document(
     except IntegrityError:  # lost a race with an identical upload
         await db.rollback()
         raise ProblemException(409, "Conflict", "This content was just added.") from None
+    job = await create_job(
+        db,
+        tenant_id=current.tenant_id,
+        job_type=INDEX_JOB,
+        created_by=current.user.id,
+        payload={
+            "document_id": str(doc.id),
+            "client_id": str(client_id),
+            "title": title,
+            "request_hash": request_hash,
+        },
+        idempotency_key=key,
+    )
     log_audit(
         db,
         tenant_id=current.tenant_id,
@@ -163,8 +210,8 @@ async def add_document(
         ip=client_ip(request),
     )
     await db.commit()
-    enqueue_ingest(current.tenant_id, doc.id)
-    return UploadOut.model_validate(doc)
+    await _enqueue(db, current.tenant_id, doc.id, job.id)
+    return UploadOut.model_validate(doc).model_copy(update={"job_id": job.id})
 
 
 @router.get("/clients/{client_id}/documents", response_model=DocumentListOut)
@@ -224,18 +271,61 @@ async def delete_document(
     await db.commit()
 
 
-@router.post("/documents/{document_id}/reindex", response_model=DocumentOut, status_code=202)
+@router.post(
+    "/documents/{document_id}/reindex",
+    response_model=ReindexOut,
+    status_code=202,
+    dependencies=[rate_limit("documents.reindex", user=30, tenant=120)],
+)
 async def reindex_document(
-    document_id: UUID, current: Annotated[CurrentUser, WRITER], db: DB
-) -> Document:
+    document_id: UUID, request: Request, current: Annotated[CurrentUser, WRITER], db: DB
+) -> ReindexOut:
     doc = await _document_or_404(db, current, document_id)
+    key = validate_idempotency_key(request.headers.get("Idempotency-Key"))
+    request_hash = hashlib.sha256(f"reindex|{doc.id}".encode()).hexdigest()
+    replay = await replay_or_none(
+        db, current.tenant_id, key, job_type=INDEX_JOB, request_hash=request_hash
+    )
+    if replay is not None:
+        return ReindexOut.model_validate(doc).model_copy(update={"job_id": replay.id})
     doc.status, doc.error = "pending", None
+    job = await create_job(
+        db,
+        tenant_id=current.tenant_id,
+        job_type=INDEX_JOB,
+        created_by=current.user.id,
+        payload={
+            "document_id": str(doc.id),
+            "client_id": str(doc.client_id),
+            "title": doc.title,
+            "reindex": True,
+            "request_hash": request_hash,
+        },
+        idempotency_key=key,
+    )
     await db.commit()
-    enqueue_ingest(current.tenant_id, doc.id)
-    return doc
+    await _enqueue(db, current.tenant_id, doc.id, job.id)
+    return ReindexOut.model_validate(doc).model_copy(update={"job_id": job.id})
 
 
-@router.post("/clients/{client_id}/search", response_model=SearchOut)
+async def _enqueue(db: AsyncSession, tenant_id: UUID, document_id: UUID, job_id: UUID) -> None:
+    """Hand indexing to the worker. A broken queue must not turn a saved document into a 500:
+    the job is marked failed and the document stays pending until Re-index is pressed."""
+    try:
+        enqueue_ingest(tenant_id, document_id, job_id=job_id)
+    except Exception:
+        logger.exception("Could not queue document indexing")
+        await update_job(
+            db, tenant_id, job_id, status="failed", error="The indexing queue is unavailable.",
+            message="Could not start indexing",
+        )
+
+
+@router.post(
+    "/clients/{client_id}/search",
+    response_model=SearchOut,
+    dependencies=[rate_limit("search", user=120, tenant=600)],
+)
 async def search(
     client_id: UUID,
     body: SearchIn,

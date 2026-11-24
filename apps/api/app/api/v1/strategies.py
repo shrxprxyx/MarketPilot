@@ -14,6 +14,7 @@ from app.ai.gateway import BudgetExceededError, GatewayError, NoRouteError, Unpr
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
+from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.client import Client
@@ -43,6 +44,7 @@ class StrategyOut(BaseModel):
     provider: str
     model_used: str
     sources: list[dict[str, Any]]
+    warnings: list[str]
     tokens_in: int
     tokens_out: int
     cost_usd: Decimal | None
@@ -58,7 +60,12 @@ async def _client_or_404(db: AsyncSession, current: CurrentUser, client_id: UUID
     return client
 
 
-@router.post("/clients/{client_id}/strategies", response_model=StrategyOut, status_code=201)
+@router.post(
+    "/clients/{client_id}/strategies",
+    response_model=StrategyOut,
+    status_code=201,
+    dependencies=[rate_limit("strategy.generate", user=10, tenant=30)],
+)
 async def create_strategy(
     client_id: UUID,
     body: GenerateIn,

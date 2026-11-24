@@ -28,6 +28,13 @@ def use_null_pool() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
+def relax_rate_limits() -> None:
+    """Tests share a handful of tenants and call expensive endpoints in bursts; the real
+    limits are exercised in test_rate_limit.py, which pins the scale back to 1."""
+    settings.rate_limit_scale = 1000.0
+
+
+@pytest.fixture(scope="session", autouse=True)
 def cleanup_test_data(use_null_pool: None) -> None:
     """
     Wipe test rows before the session so every run starts clean.
