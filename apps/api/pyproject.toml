@@ -40,8 +40,10 @@ build-backend = "uv_build"
 dev = [
     "httpx>=0.28.1",
     "mypy>=2.4.1",
+    "pip-audit>=2.10.1",
     "pytest>=9.2.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=7.1.0",
     "ruff>=0.17.5",
 ]
 
@@ -73,3 +75,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+# SRS NFR-08: at least 80 percent on the core modules (auth, tenancy, ai gateway, rag).
+# CI enforces it on the whole package, which is the stricter reading.
+fail_under = 80
+skip_covered = true
