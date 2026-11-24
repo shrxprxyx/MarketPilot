@@ -8,5 +8,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     globals: true,
+    // Component tests with userEvent can exceed the 5s default when many files run in parallel.
+    testTimeout: 15000,
   },
 });
