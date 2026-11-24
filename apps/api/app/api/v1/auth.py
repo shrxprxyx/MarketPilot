@@ -21,8 +21,10 @@ from app.auth.rate_limit import (
     enforce_login_rate_limit,
     record_login_failure,
 )
+from app.auth.stream_ticket import TTL_SECONDS, issue_ticket
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
+from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
 from app.db.rls import set_rls_context
 from app.db.session import get_db
@@ -371,9 +373,41 @@ async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> Token
 
 
 @router.post("/logout", status_code=204)
-async def logout(body: RefreshIn, db: DB) -> None:
+async def logout(body: RefreshIn, request: Request, db: DB) -> None:
     token_hash = hashlib.sha256(body.refresh_token.encode()).hexdigest()
     rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     if rt:
+        already_revoked = rt.revoked
         rt.revoked = True
+        if not already_revoked:
+            # audit_log's INSERT policy needs the tenant of the session being ended.
+            await set_rls_context(db, tenant_id=rt.tenant_id, user_id=rt.user_id)
+            log_audit(
+                db,
+                tenant_id=rt.tenant_id,
+                actor_id=rt.user_id,
+                action="logout",
+                entity="user",
+                entity_id=rt.user_id,
+                ip=client_ip(request),
+            )
         await db.commit()
+
+
+class StreamTicketOut(BaseModel):
+    ticket: str
+    expires_in: int
+
+
+@router.post(
+    "/stream-ticket",
+    response_model=StreamTicketOut,
+    dependencies=[rate_limit("auth.stream_ticket", user=60, tenant=300)],
+)
+async def stream_ticket(
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+) -> StreamTicketOut:
+    """A 60-second, single-use ticket for opening an SSE or WebSocket stream, which cannot
+    carry an Authorization header (SRS §11)."""
+    ticket = await issue_ticket(current.user.id, current.tenant_id)
+    return StreamTicketOut(ticket=ticket, expires_in=TTL_SECONDS)

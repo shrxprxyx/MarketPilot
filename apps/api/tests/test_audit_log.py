@@ -222,3 +222,31 @@ async def test_audit_log_rows_cannot_be_updated_or_deleted(admin_token: str) -> 
         )
         assert result.rowcount == 0
         await session.rollback()
+
+
+def test_client_create_update_and_logout_are_logged(admin_token: str) -> None:
+    created = client.post(
+        "/api/v1/clients", json={"name": "Audited Client"}, headers=_auth(admin_token)
+    )
+    assert created.status_code == 201, created.text
+    client_id = created.json()["id"]
+    r = client.patch(
+        f"/api/v1/clients/{client_id}", json={"industry": "SaaS"}, headers=_auth(admin_token)
+    )
+    assert r.status_code == 200, r.text
+
+    login = client.post(
+        "/api/v1/auth/login", json={"email": _ADMIN["email"], "password": _ADMIN["password"]}
+    ).json()
+    out = client.post("/api/v1/auth/logout", json={"refresh_token": login["refresh_token"]})
+    assert out.status_code == 204
+
+    entries = client.get(
+        "/api/v1/audit-log", params={"limit": 100}, headers=_auth(admin_token)
+    ).json()["items"]
+    by_action: dict[str, dict] = {}
+    for e in entries:  # newest first; keep the most recent entry per action
+        by_action.setdefault(e["action"], e)
+    assert by_action["client.created"]["entity_id"] == client_id
+    assert by_action["client.updated"]["meta"]["fields"] == ["industry"]
+    assert "logout" in by_action

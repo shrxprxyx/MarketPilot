@@ -94,6 +94,7 @@ async def _get_client_or_404(db: AsyncSession, current: CurrentUser, client_id: 
 @router.post("", response_model=ClientOut, status_code=201)
 async def create_client(
     body: ClientIn,
+    request: Request,
     current: Annotated[CurrentUser, WRITER],
     db: DB,
 ) -> Client:
@@ -105,6 +106,17 @@ async def create_client(
         goals=body.goals,
     )
     db.add(client)
+    await db.flush()  # assigns client.id so the audit row can reference it
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="client.created",
+        entity="client",
+        entity_id=client.id,
+        meta={"name": client.name},
+        ip=client_ip(request),
+    )
     await db.commit()
     return client
 
@@ -153,6 +165,7 @@ async def get_client(
 async def update_client(
     client_id: UUID,
     body: ClientPatch,
+    request: Request,
     current: Annotated[CurrentUser, WRITER],
     db: DB,
 ) -> Client:
@@ -160,6 +173,16 @@ async def update_client(
     updates = body.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(client, field, value)
+    log_audit(
+        db,
+        tenant_id=current.tenant_id,
+        actor_id=current.user.id,
+        action="client.updated",
+        entity="client",
+        entity_id=client.id,
+        meta={"fields": sorted(updates)},
+        ip=client_ip(request),
+    )
     await db.commit()
     return client
 
