@@ -16,6 +16,20 @@ export function StrategyView({ strategy }: { strategy: Strategy }) {
   const { plan } = strategy;
   return (
     <div className="flex flex-col gap-8">
+      {strategy.warnings.length > 0 && (
+        <section
+          role="note"
+          aria-label="Check these figures"
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 p-4 text-sm"
+        >
+          <h3 className="font-medium">Check these figures</h3>
+          <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-muted-foreground">
+            {strategy.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </section>
+      )}
       <dl className="grid gap-4 border-y py-4 text-sm sm:grid-cols-3">
         <div>
           <dt className={LABEL}>Model</dt>

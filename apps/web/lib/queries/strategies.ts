@@ -26,6 +26,8 @@ export type Strategy = {
   provider: string;
   model_used: string;
   sources: StrategySource[];
+  // Figures in the plan that appear nowhere in the client details or knowledge sources.
+  warnings: string[];
   tokens_in: number;
   tokens_out: number;
   cost_usd: string | null; // null = no price known for the model

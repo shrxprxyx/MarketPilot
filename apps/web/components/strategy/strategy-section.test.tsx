@@ -27,6 +27,7 @@ const strategy = (over = {}) => ({
       excerpt: "Our espresso blends are roasted in small batches.",
     },
   ],
+  warnings: [] as string[],
   tokens_in: 1200,
   tokens_out: 800,
   cost_usd: "0.0123",
@@ -149,6 +150,23 @@ describe("plan view", () => {
     rerender(<StrategySection clientId="c1" />);
     expect(screen.getByText("Cost unknown")).toBeInTheDocument();
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  it("flags figures the model quoted that were not in the input", () => {
+    as("manager");
+    setList([
+      strategy({
+        warnings: [
+          "The figure 63% does not appear in the client details or knowledge sources. Check it before sharing this strategy.",
+        ],
+      }),
+    ]);
+    const { rerender } = render(<StrategySection clientId="c1" />);
+    const note = screen.getByRole("note", { name: "Check these figures" });
+    expect(within(note).getByText(/The figure 63%/)).toBeInTheDocument();
+    setList([strategy()]);
+    rerender(<StrategySection clientId="c1" />);
+    expect(screen.queryByRole("note", { name: "Check these figures" })).not.toBeInTheDocument();
   });
 
   it("switches between versions", async () => {
