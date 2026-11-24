@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -176,6 +176,11 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     return TokenOut(access_token=access, refresh_token=raw)
 
 
+# A browser can legitimately send the same refresh cookie twice (two tabs, or a reload racing
+# a request already in flight). A token rotated within this window is that race, not theft.
+REUSE_GRACE = timedelta(seconds=10)
+
+
 async def _revoke_chain(db: AsyncSession, token: RefreshToken) -> None:
     """Revoke every token rotated from `token`, so a stolen-and-replayed token kills the session."""
     next_id = token.replaced_by
@@ -187,16 +192,35 @@ async def _revoke_chain(db: AsyncSession, token: RefreshToken) -> None:
         next_id = successor.replaced_by
 
 
+async def _chain_tail(db: AsyncSession, token: RefreshToken) -> RefreshToken:
+    """The newest token rotated from `token` (itself if it was never rotated)."""
+    tail = token
+    while tail.replaced_by is not None:
+        nxt = await db.get(RefreshToken, tail.replaced_by)
+        if nxt is None:
+            break
+        tail = nxt
+    return tail
+
+
 @router.post("/refresh", response_model=TokenOut)
 async def refresh(body: RefreshIn, db: DB) -> TokenOut:
     token_hash = hashlib.sha256(body.refresh_token.encode()).hexdigest()
-    rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+    # FOR UPDATE makes two simultaneous refreshes with one token take turns instead of
+    # both rotating it and forking the chain.
+    rt = await db.scalar(
+        select(RefreshToken).where(RefreshToken.token_hash == token_hash).with_for_update()
+    )
 
     if rt and rt.revoked and rt.replaced_by is not None:
-        # An already-rotated token was presented again: treat the chain as stolen.
-        await _revoke_chain(db, rt)
-        await db.commit()
-        raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
+        if datetime.now(timezone.utc) - rt.updated_at > REUSE_GRACE:
+            # A long-rotated token was presented again: treat the chain as stolen.
+            await _revoke_chain(db, rt)
+            await db.commit()
+            raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
+        # Just rotated: this is the double-send race. Carry on from the newest token so the
+        # session survives and the chain stays a single line.
+        rt = await _chain_tail(db, rt)
 
     if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
         raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
