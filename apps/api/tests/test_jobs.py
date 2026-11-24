@@ -402,3 +402,33 @@ def test_progress_streams_live_until_the_job_finishes(
     assert [e["status"] for e in events][0] == "queued"  # the snapshot on connect
     assert [e["status"] for e in events][-1] == "succeeded"
     assert any(e["status"] == "running" and e["progress"] == 40 for e in events)
+
+
+# ---------- the document list points at the job to follow ----------
+
+
+def _listed(token: str, cid: str, doc_id: str) -> dict[str, Any]:
+    r = client.get(
+        f"/api/v1/clients/{cid}/documents", params={"limit": 100}, headers=_auth(token)
+    )
+    assert r.status_code == 200, r.text
+    return dict(next(d for d in r.json()["items"] if d["id"] == doc_id))
+
+
+def test_list_exposes_the_active_job_and_drops_it_when_finished(
+    admin_token: str, tenant_id: UUID, client_id: str
+) -> None:
+    out = _add_doc(admin_token, client_id, "Follow me from the list. " * 10, title="Ls")
+    assert _listed(admin_token, client_id, out["id"])["job_id"] == out["job_id"]
+
+    _run_worker(tenant_id, UUID(out["id"]), UUID(out["job_id"]))
+    assert _listed(admin_token, client_id, out["id"])["job_id"] is None
+
+
+def test_list_shows_the_newest_active_job(admin_token: str, client_id: str) -> None:
+    out = _add_doc(admin_token, client_id, "Two jobs for one document.", title="Nw")
+    again = client.post(
+        f"/api/v1/documents/{out['id']}/reindex", headers=_auth(admin_token)
+    ).json()
+    assert again["job_id"] != out["job_id"]
+    assert _listed(admin_token, client_id, out["id"])["job_id"] == again["job_id"]

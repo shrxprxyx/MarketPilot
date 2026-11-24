@@ -22,6 +22,7 @@ from app.jobs.progress import update_job
 from app.jobs.service import create_job, replay_or_none, validate_idempotency_key
 from app.models.client import Client
 from app.models.document import Document
+from app.models.job import Job
 from app.rag.auto_docs import AUTO_SOURCE_TYPES
 from app.rag.extract import (
     MAX_UPLOAD_BYTES,
@@ -57,15 +58,13 @@ class DocumentOut(BaseModel):
     title: str
     status: str
     error: str | None
+    # The indexing job to follow at /jobs/{job_id}/events. Set by upload and re-index, and in
+    # the list while a job is still queued or running.
+    job_id: UUID | None = None
 
 
 class UploadOut(DocumentOut):
     duplicate: bool = False
-    job_id: UUID | None = None  # the indexing job; follow it at /jobs/{job_id}/events
-
-
-class ReindexOut(DocumentOut):
-    job_id: UUID | None = None
 
 
 class DocumentListOut(BaseModel):
@@ -214,6 +213,26 @@ async def add_document(
     return UploadOut.model_validate(doc).model_copy(update={"job_id": job.id})
 
 
+async def _active_index_jobs(
+    db: AsyncSession, tenant_id: UUID, document_ids: list[UUID]
+) -> dict[UUID, UUID]:
+    """document id -> its newest queued or running indexing job (one query for the page)."""
+    if not document_ids:
+        return {}
+    document_ref = Job.payload["document_id"].astext
+    rows = await db.execute(
+        select(document_ref, Job.id)
+        .where(
+            Job.tenant_id == tenant_id,
+            Job.type == INDEX_JOB,
+            Job.status.in_(("queued", "running")),
+            document_ref.in_([str(i) for i in document_ids]),
+        )
+        .order_by(Job.created_at, Job.id)  # later rows win, so the newest job is kept
+    )
+    return {UUID(document): job_id for document, job_id in rows.all()}
+
+
 @router.get("/clients/{client_id}/documents", response_model=DocumentListOut)
 async def list_documents(
     client_id: UUID,
@@ -240,8 +259,13 @@ async def list_documents(
     next_cursor = (
         encode_cursor(items[-1].created_at, items[-1].id) if len(rows) > limit and items else None
     )
+    jobs = await _active_index_jobs(db, current.tenant_id, [d.id for d in items])
     return DocumentListOut(
-        items=[DocumentOut.model_validate(d) for d in items], next_cursor=next_cursor
+        items=[
+            DocumentOut.model_validate(d).model_copy(update={"job_id": jobs.get(d.id)})
+            for d in items
+        ],
+        next_cursor=next_cursor,
     )
 
 
@@ -273,13 +297,13 @@ async def delete_document(
 
 @router.post(
     "/documents/{document_id}/reindex",
-    response_model=ReindexOut,
+    response_model=DocumentOut,
     status_code=202,
     dependencies=[rate_limit("documents.reindex", user=30, tenant=120)],
 )
 async def reindex_document(
     document_id: UUID, request: Request, current: Annotated[CurrentUser, WRITER], db: DB
-) -> ReindexOut:
+) -> DocumentOut:
     doc = await _document_or_404(db, current, document_id)
     key = validate_idempotency_key(request.headers.get("Idempotency-Key"))
     request_hash = hashlib.sha256(f"reindex|{doc.id}".encode()).hexdigest()
@@ -287,7 +311,7 @@ async def reindex_document(
         db, current.tenant_id, key, job_type=INDEX_JOB, request_hash=request_hash
     )
     if replay is not None:
-        return ReindexOut.model_validate(doc).model_copy(update={"job_id": replay.id})
+        return DocumentOut.model_validate(doc).model_copy(update={"job_id": replay.id})
     doc.status, doc.error = "pending", None
     job = await create_job(
         db,
@@ -305,7 +329,7 @@ async def reindex_document(
     )
     await db.commit()
     await _enqueue(db, current.tenant_id, doc.id, job.id)
-    return ReindexOut.model_validate(doc).model_copy(update={"job_id": job.id})
+    return DocumentOut.model_validate(doc).model_copy(update={"job_id": job.id})
 
 
 async def _enqueue(db: AsyncSession, tenant_id: UUID, document_id: UUID, job_id: UUID) -> None:
