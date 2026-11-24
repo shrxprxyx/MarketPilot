@@ -44,7 +44,7 @@ endpoint) with per-call cost tracking and a monthly budget.
 | **Strategy generation** | Monthly strategy per client (summary, objectives with KPIs, channels, risks) grounded in retrieved knowledge, versioned, with the source chunks and the cost shown; figures the model quotes that were not in its input are flagged as warnings |
 | **Protection** | Per-user and per-tenant rate limits on strategy generation, uploads, re-index and search; structured JSON logs with request, tenant and job IDs and secret redaction |
 | **Onboarding** | A getting-started checklist on the dashboard (add a client, connect a model, generate a strategy) and a working New client button |
-| **Quality** | 332 API tests (83% coverage, 80% enforced in CI), 325 web unit tests, 7 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
+| **Quality** | 334 API tests (83% coverage, 80% enforced in CI), 347 web unit tests, 8 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
 
 Not built yet (see the [roadmap](#15-status-and-roadmap)): website audits and crawler, Google
 integrations, content generation, calendar, Kanban board, PDF reports, WordPress/Trello/Asana
@@ -823,8 +823,11 @@ flowchart TB
 | **Pages** | Dashboard (getting-started checklist for admins and managers, New client button, role-aware stat strip, recent clients), Clients list, Client page (Overview, Brand profile, Knowledge, Strategy tabs; strategies show grounding warnings), AI models (connections, per-task routing, budget), Usage (summary, daily cost chart, breakdowns), Team (admins: members, roles, invites), Agency (admins: name and white-label branding) |
 | **Accessibility** | The Playwright suite scans the sign-in, register and app pages and the New client dialog with axe against WCAG 2.1 A and AA; in-text links are underlined and text meets the contrast ratio |
 
-Job progress is available over SSE (section 9.2), but the web app does not use it yet: the
-Knowledge tab still polls document status while anything is pending or processing.
+The Knowledge tab follows indexing over those streams (`lib/api/job-stream.ts`), through the same
+`/api` proxy, and shows a progress bar. It follows at most three jobs at once, because browsers
+limit connections per origin. Polling stays as the fallback: every 2 seconds while any document
+being indexed has no stream delivering (including the automatic brand profile document, which has
+no job), and every 15 seconds when all of them are streaming.
 
 ---
 
@@ -876,11 +879,11 @@ Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }
 
 | Layer | Tooling | What it covers | Count |
 | --- | --- | --- | --- |
-| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 332 tests (incl. isolation and eval), 83% coverage |
+| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 334 tests (incl. isolation and eval), 83% coverage |
 | Database isolation | pytest as the non-owner role | forced RLS on every tenant table: own rows visible, other tenants' invisible, no-context default deny, cross-tenant insert/update/delete refused, pooled-connection safety | in `tests/isolation/` |
 | Static checks | ruff, mypy, ESLint, `tsc` | lint, types | CI gates |
-| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules | 325 tests |
-| End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost; dashboard checklist and agency settings; WCAG 2.1 A and AA axe scans | 7 tests |
+| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules, job streaming | 347 tests |
+| End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost; dashboard checklist and agency settings; live indexing progress; WCAG 2.1 A and AA axe scans | 8 tests |
 | Load smoke | `apps/api/scripts/load_smoke.py` | 50 concurrent users on read endpoints plus 5 concurrent indexing jobs; p95 target 300 ms | run by hand |
 | Retrieval quality | `rag_eval` | hit rate at k on a golden question set | runs inside pytest |
 
@@ -1020,8 +1023,8 @@ flowchart LR
 **Known gaps in what exists**
 
 - Not built: password reset, notifications, and tenant data export and deletion.
-- Job progress streams over SSE, but the web app does not consume it yet (the Knowledge tab
-  polls), and strategy generation is not a job, so it has no progress stream or idempotency key.
+- Automatic brand profile indexing does not create a job, so that document is polled. Strategy
+  generation is not a job, so it has no progress stream or idempotency key.
 - Rate limits allow requests when Redis is unreachable, by design.
 - The project runs on Python 3.10, and the fixed versions of three transitive dependencies
   (`pillow`, `dnspython`, `filelock`) need 3.11 or newer, so CI reports their advisories without
