@@ -15,6 +15,7 @@ from app.models.client import Client
 from app.models.strategy import Strategy
 from app.rag.auto_docs import BRAND_PROFILE_TYPE, field_line, render_brand_profile
 from app.rag.retrieval import RetrievedChunk, search_chunks
+from app.strategy.grounding import warnings_for
 from app.strategy.schemas import StrategyPlan
 
 EXCERPT_CHARS = 240
@@ -120,6 +121,8 @@ async def generate_strategy(
             Strategy.client_id == client.id, Strategy.month == month
         )
     )
+    # Everything the model was shown except the output schema at the end of the prompt.
+    shown = "\n".join(m["content"].split("Write the strategy as JSON")[0] for m in messages)
     strategy = Strategy(
         tenant_id=tenant_id,
         client_id=client.id,
@@ -141,6 +144,7 @@ async def generate_strategy(
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
         cost_usd=result.cost_usd,
+        warnings=warnings_for(result.parsed, shown),
         created_by=user_id,
     )
     db.add(strategy)

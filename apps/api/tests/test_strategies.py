@@ -146,7 +146,7 @@ def _new_client(token: str, **extra: Any) -> str:
 def _index_doc(token: str, cid: str, title: str = "Coffee page", body: str = COFFEE) -> str:
     jobs: list[tuple[UUID, UUID]] = []
     mp = pytest.MonkeyPatch()
-    mp.setattr(knowledge_api, "enqueue_ingest", lambda t, d: jobs.append((t, d)))
+    mp.setattr(knowledge_api, "enqueue_ingest", lambda t, d, job_id=None: jobs.append((t, d)))
     try:
         r = client.post(
             f"/api/v1/clients/{cid}/documents",
@@ -377,3 +377,33 @@ def test_sources_survive_document_deletion(
     assert deleted.status_code == 204
     again = client.get(f"/api/v1/strategies/{made['id']}", headers=_auth(admin_token)).json()
     assert again["sources"] == made["sources"]
+
+
+# ---------- grounding (SRS §10.4) ----------
+
+
+def test_invented_figures_are_flagged_as_warnings(
+    admin_token: str, ready_client: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = {**PLAN, "summary": "Revenue grew 63% to $88,000 last quarter."}
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        return _reply(json.dumps(plan))
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    r = _generate(admin_token, ready_client, month="2027-01")
+    assert r.status_code == 201, r.text
+    warnings = r.json()["warnings"]
+    assert len(warnings) == 2
+    assert "63%" in warnings[0] and "$88,000" in warnings[1]
+
+    stored = client.get(f"/api/v1/strategies/{r.json()['id']}", headers=_auth(admin_token))
+    assert stored.json()["warnings"] == warnings
+
+
+def test_clean_strategy_has_no_warnings(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    r = _generate(admin_token, ready_client, month="2027-02")
+    assert r.status_code == 201, r.text
+    assert r.json()["warnings"] == []
