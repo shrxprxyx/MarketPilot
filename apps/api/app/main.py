@@ -14,11 +14,13 @@ from app.api.v1 import (
     auth,
     clients,
     health,
+    jobs,
     knowledge,
     me,
     members,
     ready,
     strategies,
+    tenant,
 )
 from app.config import settings
 from app.core.errors import ProblemException, problem_exception_handler, unhandled_exception_handler
@@ -63,3 +65,5 @@ app.include_router(ai_routes.router, prefix="/api/v1")
 app.include_router(ai_usage.router, prefix="/api/v1")
 app.include_router(knowledge.router, prefix="/api/v1")
 app.include_router(strategies.router, prefix="/api/v1")
+app.include_router(tenant.router, prefix="/api/v1")
+app.include_router(jobs.router, prefix="/api/v1")

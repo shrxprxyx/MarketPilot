@@ -21,5 +21,9 @@ class Tenant(UUIDMixin, TimestampMixin, Base):
     # FR-BYOM-05: optional monthly AI budget; hard_stop refuses calls once spend reaches it.
     monthly_budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     hard_stop: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
+    # FR-TEN-07: white-label branding used on client-facing reports.
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    primary_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    report_footer: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     members: Mapped[list[Membership]] = relationship(back_populates="tenant")
