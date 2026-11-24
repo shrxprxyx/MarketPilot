@@ -61,7 +61,11 @@ export async function forwardTokenCall(
 export async function refreshFromCookie(req: NextRequest): Promise<NextResponse> {
   const token = req.cookies.get(REFRESH_COOKIE)?.value;
   if (!token) return problem(401, "Unauthorized", "Not signed in.");
-  const res = await forwardTokenCall("/auth/refresh", { refresh_token: token });
+  let res = await forwardTokenCall("/auth/refresh", { refresh_token: token });
+  // The API closes idle keep-alive sockets after ~5s, so a pooled connection can be reset just
+  // as it is reused. Without a retry that surfaces as 502 and signs the user out. Retrying is
+  // safe: a refresh the API already processed is absorbed by its reuse grace window.
+  if (res.status === 502) res = await forwardTokenCall("/auth/refresh", { refresh_token: token });
   if (res.status === 401) clearRefreshCookie(res);
   return res;
 }

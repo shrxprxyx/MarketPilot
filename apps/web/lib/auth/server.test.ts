@@ -82,6 +82,34 @@ describe("refresh handler", () => {
   });
 });
 
+describe("refresh handler: unreachable API", () => {
+  it("retries once when the first call fails to connect, and keeps the session", async () => {
+    const fetchMock = vi
+      .fn<(url: string, init?: RequestInit) => Promise<Response>>()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "A2", refresh_token: "R2" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await refresh(req("/api/auth/refresh", undefined, "R1"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(200);
+    expect(res.cookies.get(REFRESH_COOKIE)?.value).toBe("R2");
+  });
+
+  it("returns 502 without clearing the cookie when the API stays unreachable", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await refresh(req("/api/auth/refresh", undefined, "R1"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(res.status).toBe(502);
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+});
+
 describe("logout handler", () => {
   it("returns 204 and clears the cookie even when no cookie was sent", async () => {
     const fetchMock = apiReturns(204);
