@@ -176,10 +176,27 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     return TokenOut(access_token=access, refresh_token=raw)
 
 
+async def _revoke_chain(db: AsyncSession, token: RefreshToken) -> None:
+    """Revoke every token rotated from `token`, so a stolen-and-replayed token kills the session."""
+    next_id = token.replaced_by
+    while next_id is not None:
+        successor = await db.get(RefreshToken, next_id)
+        if successor is None:
+            break
+        successor.revoked = True
+        next_id = successor.replaced_by
+
+
 @router.post("/refresh", response_model=TokenOut)
 async def refresh(body: RefreshIn, db: DB) -> TokenOut:
     token_hash = hashlib.sha256(body.refresh_token.encode()).hexdigest()
     rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+
+    if rt and rt.revoked and rt.replaced_by is not None:
+        # An already-rotated token was presented again: treat the chain as stolen.
+        await _revoke_chain(db, rt)
+        await db.commit()
+        raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
 
     if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
         raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
@@ -194,6 +211,8 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
         expires_at=refresh_token_expiry(),
     )
     db.add(new_rt)
+    await db.flush()
+    rt.replaced_by = new_rt.id
 
     # Resume the exact tenant this token was issued for — no re-resolution, so
     # this stays correct for users with several active memberships.

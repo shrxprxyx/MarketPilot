@@ -80,6 +80,20 @@ def test_refresh_revoked_after_rotation() -> None:
     assert r.status_code == 401
 
 
+def test_refresh_reuse_revokes_the_whole_chain() -> None:
+    """FR-AUTH-02: replaying a rotated token also kills the token it was rotated into."""
+    login = client.post("/api/v1/auth/login", json={
+        "email": _EMAIL,
+        "password": _PASSWORD,
+    })
+    rt1 = login.json()["refresh_token"]
+    rt2 = client.post("/api/v1/auth/refresh", json={"refresh_token": rt1}).json()["refresh_token"]
+    reuse = client.post("/api/v1/auth/refresh", json={"refresh_token": rt1})
+    assert reuse.status_code == 401
+    child = client.post("/api/v1/auth/refresh", json={"refresh_token": rt2})
+    assert child.status_code == 401
+
+
 def test_logout() -> None:
     login = client.post("/api/v1/auth/login", json={
         "email": _EMAIL,
