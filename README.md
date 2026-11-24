@@ -35,17 +35,20 @@ endpoint) with per-call cost tracking and a monthly budget.
 
 | Area | What works today |
 | --- | --- |
-| **Accounts and tenants** | Register an agency, sign in, switch between agencies you belong to, invite teammates by link, three roles (admin, manager, member), member deactivation, immutable audit log |
+| **Accounts and tenants** | Register an agency, sign in, switch between agencies you belong to, invite teammates by link, three roles (admin, manager, member), member deactivation, a Team screen for members and invites, agency name and white-label branding (logo, color, report footer), immutable audit log |
 | **Clients** | Create, edit, archive and restore clients; brand profile (voice, tone, audience, keywords, do and don't rules, sample text) |
-| **Knowledge base (RAG)** | Upload PDF, DOCX, TXT or Markdown (up to 10 MB) or paste text; background chunking and embedding; duplicate skipping; re-index and delete; hybrid search (vector plus full-text, fused with RRF); the brand profile is indexed automatically |
-| **AI gateway (BYOM)** | Encrypted connections to OpenAI, Anthropic, Ollama or OpenAI-compatible endpoints; Test button with model listing; per-task routing with fallback; native structured output with schema validation and repair; retries and a deadline |
+| **Knowledge base (RAG)** | Upload PDF, DOCX, TXT or Markdown (up to 10 MB) or paste text; background chunking and embedding tracked as a job with progress, cancellation and retries; `Idempotency-Key` on upload and re-index; duplicate skipping; re-index and delete; hybrid search (vector plus full-text, fused with RRF); the brand profile is indexed automatically |
+| **Background jobs** | A `jobs` table with tenant isolation; job status, list and cancel endpoints; live progress over Server-Sent Events, opened with a 60-second single-use stream ticket |
+| **AI gateway (BYOM)** | Encrypted connections to OpenAI, Anthropic, Ollama or OpenAI-compatible endpoints; Test button with model listing; per-task routing with fallback; native structured output with schema validation and repair; token streaming and embeddings in the provider adapters; retries and a deadline |
 | **Usage, cost and budget** | Every call recorded (tokens, latency, estimated cost); usage dashboard grouped by day, client, task or model; monthly budget with an 80% warning and an optional hard stop; pre-flight cost estimate |
-| **Strategy generation** | Monthly strategy per client (summary, objectives with KPIs, channels, risks) grounded in retrieved knowledge, versioned, with the source chunks and the cost shown |
-| **Quality** | 244 API tests, 295 web unit tests, 4 Playwright end-to-end tests, database-level isolation tests, a retrieval hit-rate evaluation, CI on every push |
+| **Strategy generation** | Monthly strategy per client (summary, objectives with KPIs, channels, risks) grounded in retrieved knowledge, versioned, with the source chunks and the cost shown; figures the model quotes that were not in its input are flagged as warnings |
+| **Protection** | Per-user and per-tenant rate limits on strategy generation, uploads, re-index and search; structured JSON logs with request, tenant and job IDs and secret redaction |
+| **Onboarding** | A getting-started checklist on the dashboard (add a client, connect a model, generate a strategy) and a working New client button |
+| **Quality** | 332 API tests (83% coverage, 80% enforced in CI), 325 web unit tests, 7 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
 
 Not built yet (see the [roadmap](#15-status-and-roadmap)): website audits and crawler, Google
 integrations, content generation, calendar, Kanban board, PDF reports, WordPress/Trello/Asana
-integrations, and the web screen for team management (the API for it exists).
+integrations, password reset, notifications, and tenant data export and deletion.
 
 ---
 
@@ -104,7 +107,7 @@ flowchart LR
 | **Same-origin proxy** (`/api/*` rewritten to FastAPI) | The browser only talks to the Next.js origin, so the refresh token can live in an `HttpOnly` first-party cookie and CORS is not needed for the UI. |
 | **Bring your own model** | The platform carries no AI cost. Keys are encrypted per tenant and calls are made by the API server using the tenant's own connection. |
 | **Local embeddings** (fastembed, 384 dimensions) | Indexing and search need no external API or key, so retrieval works the same for every tenant. |
-| **Background indexing** (Celery + Redis) | Uploads return immediately; chunking and embedding happen in a worker. |
+| **Background indexing** (Celery + Redis) | Uploads return immediately; chunking and embedding happen in a worker and are tracked as a job whose progress can be streamed. |
 | **Usage rows computed from real calls** | Spend is always summed from `usage_logs`, so the budget can never drift from the data. |
 
 ### Technology stack
@@ -135,30 +138,35 @@ marketpilot/
 │   │   ├── app/
 │   │   │   ├── main.py            app factory, middleware, router registration
 │   │   │   ├── config.py          settings from environment / .env
-│   │   │   ├── api/v1/            routers: auth, me, members, clients, knowledge,
-│   │   │   │                      strategies, ai_connections, ai_routes, ai_usage,
+│   │   │   ├── api/v1/            routers: auth, me, members, tenant, clients, knowledge,
+│   │   │   │                      strategies, jobs, ai_connections, ai_routes, ai_usage,
 │   │   │   │                      ai_budget, audit, health, ready
-│   │   │   ├── auth/              JWT, password hashing, RBAC dependencies, rate limit
-│   │   │   ├── core/              errors (RFC 7807), logging, request id, audit, crypto,
-│   │   │   │                      pagination, redis client
+│   │   │   ├── auth/              JWT, password hashing, RBAC dependencies, login rate
+│   │   │   │                      limit, single-use stream tickets
+│   │   │   ├── core/              errors (RFC 7807), JSON logging with redaction, request
+│   │   │   │                      id middleware, rate limits, audit, crypto, pagination,
+│   │   │   │                      redis client
 │   │   │   ├── db/                engine, session, RLS context helper, model registry
 │   │   │   ├── models/            SQLAlchemy models (one file per table)
 │   │   │   ├── ai/                gateway, provider adapters, budget
 │   │   │   ├── rag/               chunking, extraction, embeddings, ingestion,
 │   │   │   │                      retrieval, auto-managed documents
-│   │   │   ├── strategy/          prompt building, generator, output schema
-│   │   │   └── jobs/              Celery app and tasks
+│   │   │   ├── strategy/          prompt building, generator, output schema, grounding check
+│   │   │   └── jobs/              Celery app and tasks, job state and progress publishing
 │   │   ├── alembic/versions/      database migrations
 │   │   ├── rag_eval/              golden question set and hit-rate script
+│   │   ├── scripts/               load_smoke.py (50 users plus 5 concurrent jobs)
 │   │   ├── tests/                 API tests; tests/isolation = database-level RLS tests
 │   │   └── Dockerfile.worker      worker image
 │   └── web/                   Next.js application
 │       ├── app/
 │       │   ├── (auth)/            login, register, accept-invite
-│       │   ├── (app)/             dashboard, clients, clients/[id], settings/ai, usage, team
+│       │   ├── (app)/             dashboard, clients, clients/[id], settings/ai,
+│       │   │                      settings/agency, usage, team
 │       │   └── api/auth/*         route handlers that own the refresh cookie
 │       ├── components/            feature folders: auth, shell, clients, knowledge,
-│       │                          strategy, ai, budget, usage, dashboard, ui (shadcn)
+│       │                          strategy, ai, budget, usage, dashboard, settings, team,
+│       │                          ui (shadcn)
 │       ├── lib/                   api client, session store, query hooks, schemas, nav
 │       └── e2e/                   Playwright tests and a stub LLM server
 ```
@@ -201,11 +209,12 @@ The API reads `.env` from the repository root (or `apps/api`); real environment 
 | `DATABASE_URL` | yes | Runtime connection, as the non-owner `app_user` role (RLS enforced). `postgresql+asyncpg://…` |
 | `DATABASE_URL_DIRECT` | yes | Migrations, as the owner role (DDL, grants). `postgresql+psycopg://…` |
 | `APP_USER_DB_PASSWORD` | no | Password the migration sets for `app_user`. Change it outside local development. |
-| `REDIS_URL` | yes | Celery broker and result backend, login rate limiting |
+| `REDIS_URL` | yes | Celery broker and result backend, rate limits, job progress events and stream tickets |
 | `JWT_SECRET` | yes | Signs access tokens (HS256). Use a long random value. |
 | `FERNET_KEYS` | yes | Comma-separated Fernet keys. The first encrypts, all decrypt (key rotation). Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `ALLOWED_ORIGINS` | no | CORS origins, default `http://localhost:3000` |
 | `ALLOW_PRIVATE_BASE_URLS` | no | `false` by default. Set `true` to let model connections point at loopback or private-network addresses (local Ollama). Link-local and metadata addresses are always refused. |
+| `RATE_LIMIT_SCALE` | no | Multiplies every per-user and per-tenant rate limit. Default `1`; leave it alone in production. The test suite raises it. |
 | `API_URL` (web) | no | Where Next.js proxies `/api/*`, default `http://localhost:8000/api/v1` |
 | `E2E_BASE_URL`, `E2E_DATABASE_URL` | tests | Playwright target and a `psql` URL for seeding (otherwise it uses `docker exec`) |
 
@@ -403,9 +412,13 @@ Registering creates an agency and makes you its **admin**. Roles are enforced on
 | Provider keys at rest | Fernet encryption (rotatable keys), write-only in the API and UI (only the last 4 characters are shown), never logged |
 | SSRF through model base URLs | Only http and https; the host is resolved and checked before every request; link-local and metadata addresses always refused; loopback and private networks refused unless `ALLOW_PRIVATE_BASE_URLS=true`; redirects are not followed |
 | Prompt injection through documents | Knowledge text is delimited in `<source>` blocks, labelled as untrusted data, stripped of control characters, and cannot close its own block; the system prompt tells the model not to follow instructions found in sources |
+| Abuse of expensive endpoints | Per-user and per-tenant rate limits (Redis, fixed window) on strategy generation, upload, re-index and search return 429 with `Retry-After`; if Redis is down the limiter allows requests rather than blocking them |
+| Streams that cannot send an Authorization header | `POST /auth/stream-ticket` issues a 60-second, single-use ticket (stored hashed) that opens an SSE stream for the caller's own tenant only |
+| Secrets in logs | Every log line is JSON with request, tenant and job IDs; API keys, bearer tokens, JWTs and password-style values are redacted, including in tracebacks |
 | Runaway AI spend | Monthly budget with a hard stop enforced in the gateway (server-side); unpriced models are refused while a hard stop is on |
 | Tampering with history | Audit log is append-only for the application role |
 | Invalid model output | JSON schema validation with up to two repair retries; nothing is stored if the output never validates |
+| Invented figures in a strategy | A post-check flags any figure in the plan's claims that is not in the facts or sources the model was given, and the strategy shows a warning |
 
 ---
 
@@ -423,6 +436,7 @@ erDiagram
     CLIENTS ||--o{ DOCUMENTS : has
     DOCUMENTS ||--o{ DOCUMENT_CHUNKS : "split into"
     CLIENTS ||--o{ STRATEGIES : has
+    TENANTS ||--o{ JOBS : runs
     TENANTS ||--o{ AI_CONNECTIONS : configures
     TENANTS ||--o{ TASK_MODEL_ROUTES : routes
     AI_CONNECTIONS ||--o{ TASK_MODEL_ROUTES : "primary and fallback"
@@ -437,6 +451,9 @@ erDiagram
         string plan
         numeric monthly_budget_usd
         boolean hard_stop
+        string logo_url
+        string primary_color
+        string report_footer
     }
     USERS {
         uuid id PK
@@ -513,7 +530,18 @@ erDiagram
         int version
         jsonb plan
         jsonb sources
+        jsonb warnings
         numeric cost_usd
+    }
+    JOBS {
+        uuid id PK
+        uuid tenant_id FK
+        string type
+        string status
+        int progress
+        jsonb payload
+        jsonb result_ref
+        string idempotency_key
     }
     AI_CONNECTIONS {
         uuid id PK
@@ -560,11 +588,17 @@ Notes on specific tables:
 - **`strategies`** store a **snapshot** of their sources (chunk id, document title, excerpt), so a
   strategy still shows its sources after a document is deleted. `(client_id, month, version)` is
   unique.
+- **`jobs`** track background work (`queued → running → succeeded`, `failed` or `cancelled`). The
+  row is the source of truth; every change is also published to a Redis channel scoped to the
+  tenant and job, which the SSE endpoint relays. `(tenant_id, idempotency_key)` is unique, so a
+  retried POST returns the original job.
+- **`strategies.warnings`** lists figures the model quoted that were not in its input.
+- **`tenants`** also carry the white-label branding (logo URL, primary color, report footer).
 - **`usage_logs.cost_usd`** is `NULL` when no price is known for the model ("unpriced"). Spend is
   always summed from this table.
 - **`model_pricing`** is global (USD per million tokens). It is seeded with OpenAI `gpt-4o` and
   `gpt-4o-mini` and 13 Claude models by migrations; Ollama is priced at zero in code.
-- 17 Alembic migrations in `apps/api/alembic/versions/` define the schema, the `app_user` role,
+- 21 Alembic migrations in `apps/api/alembic/versions/` define the schema, the `app_user` role,
   the RLS policies and the seed prices.
 
 ---
@@ -590,14 +624,27 @@ flowchart TD
     ext --> hash{"Same content hash<br/>already for this client?"}
     hash -->|yes| dup["Return the existing document,<br/>marked duplicate"]
     hash -->|no| row["Create document, status pending"]
-    row --> q["Enqueue ingest job in Redis"]
-    q --> w["Celery worker: status processing"]
+    row --> jb["Create a job row, status queued"]
+    jb --> q["Enqueue ingest task in Redis"]
+    q --> w["Celery worker: job running, status processing"]
     w --> ch["Chunk: about 500 tokens,<br/>80 overlap, paragraph aware"]
     ch --> em["Embed in batches of 32<br/>fastembed, 384 dimensions"]
     em --> st["Replace the document's chunks"]
-    st --> ok(["status ready"])
-    w -.->|any error| fail(["status failed, 'Try re-indexing'"])
+    st --> ok(["status ready, job succeeded"])
+    w -.->|error, retries left| retry["Back to the queue after 2, 4 then 8 seconds"]
+    w -.->|error, out of retries| fail(["status failed, 'Try re-indexing'"])
+    w -.->|job cancelled| can(["status failed, 'cancelled'"])
 ```
+
+- Every upload and re-index returns a `job_id`. Follow it with `GET /jobs/{id}`, or stream it:
+  `POST /auth/stream-ticket`, then open `GET /jobs/{id}/events?ticket=…` (Server-Sent Events:
+  the current state first, then each change until the job finishes). `DELETE /jobs/{id}` cancels
+  a queued or running job.
+- Send an `Idempotency-Key` header (8 to 100 characters) on upload or re-index and a retried
+  request returns the original document and job instead of creating another. Reusing a key for
+  a different request is a 422.
+- If the queue is unavailable the upload is still saved; the job is marked failed and Re-index
+  retries it.
 
 - **Re-index** re-runs the same idempotent job; **delete** removes the document and (by cascade)
   its chunks.
@@ -736,7 +783,7 @@ sequenceDiagram
 flowchart TB
     subgraph routes["Routes (app/)"]
         auth["(auth): login, register, accept-invite"]
-        appr["(app): dashboard, clients, clients/[id],<br/>settings/ai, usage, team (placeholder)"]
+        appr["(app): dashboard, clients, clients/[id],<br/>settings/ai, settings/agency, usage, team"]
         ah["api/auth/*: route handlers"]
     end
     subgraph shell["App shell"]
@@ -747,7 +794,7 @@ flowchart TB
     subgraph feat["Feature components"]
         f1["clients, knowledge, strategy"]
         f2["ai (connections, routing), budget, usage"]
-        f3["dashboard"]
+        f3["dashboard (stats, getting started),<br/>settings (agency), team"]
     end
     subgraph data["Data layer (lib/)"]
         q["TanStack Query hooks<br/>lib/queries/*"]
@@ -769,15 +816,15 @@ flowchart TB
 | **Auth flow** | `(auth)` pages post to `/api/auth/*` route handlers, which call FastAPI and store the refresh token in an `HttpOnly` cookie; the browser only ever receives the short-lived access token |
 | **Session** | A Zustand store holds the access token and `/me` in memory. `SessionGate` restores it on load and redirects signed-out users to `/login?next=…` (the `next` value is validated by `safe-next`) |
 | **API client** | `apiFetch` adds the Bearer token, retries once after a silent refresh on 401 (concurrent refreshes share one request), and turns `problem+json` into typed `ApiError`s |
-| **Server state** | TanStack Query hooks per resource (`lib/queries`): clients, brand profile, documents, strategies, AI connections and routes, usage, budget, tenants |
+| **Server state** | TanStack Query hooks per resource (`lib/queries`): clients, brand profile, documents, strategies, AI connections and routes, usage, budget, tenants, members and invites, agency settings |
 | **Navigation** | One declarative table in `lib/nav.ts` says which role sees which item; it mirrors the API's role checks |
 | **Forms** | react-hook-form with zod schemas; server errors are shown inline |
 | **UI** | shadcn/ui on Base UI, Tailwind 4, dark monochrome theme; every clickable shows a pointer cursor |
-| **Pages** | Dashboard (role-aware stat strip and recent clients), Clients list, Client page (Overview, Brand profile, Knowledge, Strategy tabs), AI models (connections, per-task routing, budget), Usage (summary, daily cost chart, breakdowns) |
+| **Pages** | Dashboard (getting-started checklist for admins and managers, New client button, role-aware stat strip, recent clients), Clients list, Client page (Overview, Brand profile, Knowledge, Strategy tabs; strategies show grounding warnings), AI models (connections, per-task routing, budget), Usage (summary, daily cost chart, breakdowns), Team (admins: members, roles, invites), Agency (admins: name and white-label branding) |
+| **Accessibility** | The Playwright suite scans the sign-in, register and app pages and the New client dialog with axe against WCAG 2.1 A and AA; in-text links are underlined and text meets the contrast ratio |
 
-**Known placeholders:** the **Team** page shows "Coming next" and the dashboard's "New client"
-button is disabled (clients are created from the Clients page). The API for members and invites is
-complete and tested.
+Job progress is available over SSE (section 9.2), but the web app does not use it yet: the
+Knowledge tab still polls document status while anything is pending or processing.
 
 ---
 
@@ -795,19 +842,25 @@ signed-in member of the agency; roles are listed in [section 7.4](#74-roles-and-
 | | `POST /auth/logout` | refresh token | Revoke the refresh token |
 | | `POST /auth/switch-tenant` | any | Move to another agency you belong to |
 | | `POST /auth/accept-invite` | invite token | Join an agency |
+| | `POST /auth/stream-ticket` | any | 60-second single-use ticket for opening an SSE stream |
 | Me | `GET /me`, `GET /me/tenants` | any | Current identity; agencies you belong to |
 | Members | `GET /members`, `PATCH`/`DELETE /members/{id}` | admin | List, change role or status, remove |
 | | `POST /members/invite`, `GET /members/invites`, `DELETE /members/invites/{id}` | admin | Create, list, revoke invites |
+| Agency | `GET /tenant` | any | Agency name, plan and branding |
+| | `PATCH /tenant`, `PUT /tenant/branding` | admin | Rename; set logo URL, primary color, report footer |
 | Audit | `GET /audit-log` | admin | Immutable activity log |
 | Clients | `GET /clients`, `GET /clients/{id}` | any | List (paginated), read |
 | | `POST /clients`, `PATCH /clients/{id}`, `DELETE /clients/{id}` | admin, manager | Create, edit, archive |
 | | `GET`/`PUT /clients/{id}/brand-profile` | read: any, write: admin, manager | Brand profile |
 | Knowledge | `GET /clients/{id}/documents` | any | List documents |
-| | `POST /clients/{id}/documents` | admin, manager | Upload a file (multipart) or paste text (JSON) |
-| | `POST /documents/{id}/reindex`, `DELETE /documents/{id}` | admin, manager | Re-index, delete |
+| | `POST /clients/{id}/documents` | admin, manager | Upload a file (multipart) or paste text (JSON); returns a `job_id`; accepts `Idempotency-Key` |
+| | `POST /documents/{id}/reindex`, `DELETE /documents/{id}` | admin, manager | Re-index (returns a `job_id`, accepts `Idempotency-Key`), delete |
 | | `POST /clients/{id}/search` | any | Hybrid search |
 | Strategies | `POST /clients/{id}/strategies` | admin, manager | Generate a new version |
 | | `GET /clients/{id}/strategies`, `GET /strategies/{id}` | any | List, read |
+| Jobs | `GET /jobs`, `GET /jobs/{id}` | any | List (paginated, filter by `status` and `type`), read |
+| | `DELETE /jobs/{id}` | admin, manager | Cancel a queued or running job |
+| | `GET /jobs/{id}/events?ticket=…` | ticket or bearer | Server-Sent Events: current state, then each change until done |
 | AI connections | `GET`/`POST /ai/connections`, `POST /ai/connections/{id}/test`, `DELETE /ai/connections/{id}` | admin, manager | Manage connections; Test lists models |
 | AI routing | `GET`/`PUT /ai/routes` | admin, manager | Per-task model routing with fallback |
 | Usage | `GET /ai/usage?group_by=day\|client\|task\|model&days=30` | admin, manager | Usage and cost analytics |
@@ -815,7 +868,7 @@ signed-in member of the agency; roles are listed in [section 7.4](#74-roles-and-
 | | `PUT /ai/budget` | admin | Set monthly budget and hard stop |
 | | `GET /ai/usage/estimate` | admin, manager | Pre-flight cost estimate |
 
-Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }`.
+Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }`. A 429 from a rate limit also carries a `Retry-After` header.
 
 ---
 
@@ -823,16 +876,20 @@ Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }
 
 | Layer | Tooling | What it covers | Count |
 | --- | --- | --- | --- |
-| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants, invites, clients, knowledge and retrieval, AI connections and gateway, budget, strategies, audit log, prompt safety, SSRF guard, worker model registration | 244 tests (incl. isolation and eval) |
+| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 332 tests (incl. isolation and eval), 83% coverage |
 | Database isolation | pytest as the non-owner role | forced RLS on every tenant table: own rows visible, other tenants' invisible, no-context default deny, cross-tenant insert/update/delete refused, pooled-connection safety | in `tests/isolation/` |
 | Static checks | ruff, mypy, ESLint, `tsc` | lint, types | CI gates |
-| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules | 295 tests |
-| End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost | 4 tests |
+| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules | 325 tests |
+| End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost; dashboard checklist and agency settings; WCAG 2.1 A and AA axe scans | 7 tests |
+| Load smoke | `apps/api/scripts/load_smoke.py` | 50 concurrent users on read endpoints plus 5 concurrent indexing jobs; p95 target 300 ms | run by hand |
 | Retrieval quality | `rag_eval` | hit rate at k on a golden question set | runs inside pytest |
 
 ```bash
-# API
+# API (CI also enforces 80% coverage: add --cov=app)
 cd apps/api && uv run ruff check . && uv run mypy app && uv run pytest -q
+
+# Load smoke test against a running API (use a development database)
+cd apps/api && uv run python scripts/load_smoke.py --base-url http://localhost:8000/api/v1
 
 # Web
 cd apps/web && pnpm lint && pnpm exec tsc --noEmit
@@ -852,8 +909,8 @@ pull request:
 
 ```mermaid
 flowchart LR
-    push(["push or pull request"]) --> api["api job<br/>ruff, mypy, migrations,<br/>drift check, pytest"]
-    push --> web["web job<br/>eslint, typegen, tsc,<br/>vitest, build"]
+    push(["push or pull request"]) --> api["api job<br/>ruff, mypy, migrations,<br/>drift check, pytest with coverage,<br/>pip-audit (advisory)"]
+    push --> web["web job<br/>pnpm audit, eslint, typegen,<br/>tsc, vitest, build"]
     api --> e2e["e2e job<br/>needs api and web:<br/>build, warm embedding model,<br/>start API, worker and web,<br/>Playwright"]
     web --> e2e
     e2e -.->|on failure| art["upload traces and logs"]
@@ -958,16 +1015,20 @@ flowchart LR
 | 3. Audit engine | Crawler, SEO checks, PageSpeed, social import, competitors, Google OAuth | Not started |
 | 4. Generators | Tasks, 30-day calendar, content, variations, SEO scoring, SSE progress | Not started (the strategy generator was built early as the Phase 2 vertical slice) |
 | 5. Collaboration and reports | Kanban, real-time, analytics, PDF reports, WordPress, Trello, Asana | Not started |
-| 6. Polish | Seed data, accessibility, performance, docs, pitch | Not started |
+| 6. Polish | Seed data, accessibility, performance, docs, pitch | Not started (axe accessibility checks and a load smoke test already exist) |
 
 **Known gaps in what exists**
 
-- Web UI for team management (`/team`) is a placeholder; members and invites work through the API.
-- The dashboard's "New client" button is disabled (use **Clients**).
+- Not built: password reset, notifications, and tenant data export and deletion.
+- Job progress streams over SSE, but the web app does not consume it yet (the Knowledge tab
+  polls), and strategy generation is not a job, so it has no progress stream or idempotency key.
+- Rate limits allow requests when Redis is unreachable, by design.
+- The project runs on Python 3.10, and the fixed versions of three transitive dependencies
+  (`pillow`, `dnspython`, `filelock`) need 3.11 or newer, so CI reports their advisories without
+  failing.
 - Knowledge currently auto-indexes the brand profile only; audit summaries and approved
   content or strategies will use the same helper (`rag.auto_docs.sync_auto_document`) when those
   features arrive.
-- Strategy generation is a single request; streaming progress (SSE) is planned.
 - Tenants cannot yet enter their own model prices; models without a seeded price are "unpriced".
 - No deployment configuration is included yet (local Docker Compose only).
 
@@ -979,7 +1040,9 @@ flowchart LR
 | --- | --- |
 | API tests or Playwright cannot connect | Postgres or Redis is not running: `docker compose up -d postgres redis` (start Docker Desktop first on Windows) |
 | First upload or search is slow | The embedding model downloads once (about 30 s); later runs are fast |
-| Documents stay `pending` | The Celery worker is not running; start it as in the quick start |
+| Documents stay `pending` | The Celery worker is not running, or it is an older copy than the API; start (or restart) it as in the quick start. After pulling changes, restart both the API and the worker, and run `uv run alembic upgrade head` |
+| `429 Too Many Requests` with `Retry-After` | A per-user or per-tenant rate limit was hit; wait the number of seconds in the header |
+| An SSE stream returns 401 | Stream tickets last 60 seconds and work once; request a new one from `POST /auth/stream-ticket` |
 | Test button says private and loopback addresses are not allowed | Expected for `localhost`; set `ALLOW_PRIVATE_BASE_URLS=true` (local use) or use a tunnel |
 | "This model has no known price, so the hard stop cannot be enforced" | The model is not in `model_pricing`; turn the hard stop off or use a priced model |
 | "Set up a model for the strategy task" (409) | Add a connection and a `strategy` route under **AI models** |
