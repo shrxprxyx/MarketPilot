@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import { NewClientDialog } from "@/components/clients/new-client-dialog";
+import { GettingStarted } from "@/components/dashboard/getting-started";
 import { RecentClients } from "@/components/dashboard/recent-clients";
 import { StatStrip } from "@/components/dashboard/stat-strip";
-import { Button } from "@/components/ui/button";
 import { useSession } from "@/lib/auth/session-store";
 
 export default function HomePage() {
   const me = useSession((s) => s.me);
   if (!me) return null;
+  const canWrite = me.role === "admin" || me.role === "manager"; // same rule as the clients API
 
   return (
     <div className="flex flex-col gap-12">
@@ -21,11 +23,10 @@ export default function HomePage() {
             {me.tenant_name}
           </h1>
         </div>
-        {/* The create-client screen is built in the next stage. */}
-        <Button size="lg" className="h-11 shrink-0 px-5" disabled title="Coming next">
-          New client
-        </Button>
+        {canWrite && <NewClientDialog />}
       </header>
+
+      <GettingStarted role={me.role} />
 
       <StatStrip role={me.role} />
 
