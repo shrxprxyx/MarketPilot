@@ -29,18 +29,19 @@ async def set_rls_context(
     later transactions see '' instead of NULL, and the bare cast then raises
     (migration d4f7b1c8a2e6, tests/isolation/test_pooled_connection.py).
     """
-    if tenant_id is not None:
-        await session.execute(
-            text("SELECT set_config('app.tenant_id', :v, true)"),
-            {"v": str(tenant_id)},
-        )
-    if user_id is not None:
-        await session.execute(
-            text("SELECT set_config('app.user_id', :v, true)"),
-            {"v": str(user_id)},
-        )
-    if invite_token_hash is not None:
-        await session.execute(
-            text("SELECT set_config('app.invite_token_hash', :v, true)"),
-            {"v": invite_token_hash},
-        )
+    # One statement for however many variables are set: this runs on every request, and each
+    # extra round trip to Postgres is paid by every endpoint.
+    settings = {
+        "app.tenant_id": str(tenant_id) if tenant_id is not None else None,
+        "app.user_id": str(user_id) if user_id is not None else None,
+        "app.invite_token_hash": invite_token_hash,
+    }
+    chosen = [(name, value) for name, value in settings.items() if value is not None]
+    if not chosen:
+        return
+    calls = ", ".join(f"set_config(:k{i}, :v{i}, true)" for i in range(len(chosen)))
+    params: dict[str, str] = {}
+    for i, (name, value) in enumerate(chosen):
+        params[f"k{i}"] = name
+        params[f"v{i}"] = str(value)
+    await session.execute(text(f"SELECT {calls}"), params)  # noqa: S608 - names are fixed above

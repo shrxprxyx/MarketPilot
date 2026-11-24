@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import decode_access_token
 from app.core.errors import ProblemException
+from app.core.logging import tenant_id_var
 from app.db.rls import set_rls_context
 from app.db.session import get_db
 from app.models.membership import Membership
@@ -36,6 +37,7 @@ async def get_current_user(
 
     user_id = UUID(payload["sub"])
     tenant_id = UUID(payload["tenant_id"])
+    tenant_id_var.set(str(tenant_id))  # so every log line for this request names its tenant
 
     # Set RLS context before any tenant-scoped query runs on this session.
     await set_rls_context(db, tenant_id=tenant_id, user_id=user_id)

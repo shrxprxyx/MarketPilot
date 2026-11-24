@@ -1,30 +1,44 @@
-import logging
+import re
 import uuid
-from collections.abc import Awaitable, Callable
-from typing import Any
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-logger = logging.getLogger(__name__)
+from app.core.logging import request_id_var, tenant_id_var
+
+# A caller-supplied ID is kept only if it is short and plain; anything else gets a fresh one.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
 
 
-class RequestIDMiddleware(BaseHTTPMiddleware):
-    async def dispatch(
-        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-        # attach to all log records for this request
-        old_factory = logging.getLogRecordFactory()
+class RequestIDMiddleware:
+    """Gives every request an ID (the caller's X-Request-ID if it is well formed), exposes it to
+    log records through a context variable, and echoes it in the response.
 
-        def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-            record = old_factory(*args, **kwargs)
-            record.request_id = request_id
-            return record
+    Written as plain ASGI rather than BaseHTTPMiddleware: it adds no per-request task or
+    stream wrapping, which matters on the hot path, and it never touches process-wide logging
+    state, so concurrent requests cannot overwrite each other's ID.
+    """
 
-        logging.setLogRecordFactory(record_factory)
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        logging.setLogRecordFactory(old_factory)
-        return response
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        supplied = MutableHeaders(scope=scope).get("x-request-id")
+        request_id = supplied if supplied and _SAFE_ID.match(supplied) else str(uuid.uuid4())
+        id_token = request_id_var.set(request_id)
+        tenant_token = tenant_id_var.set(None)  # filled in once the caller is authenticated
+
+        async def send_with_id(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            request_id_var.reset(id_token)
+            tenant_id_var.reset(tenant_token)
