@@ -45,6 +45,8 @@ async def get_current_user(
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise ProblemException(401, "Unauthorized", "User not found.")
+    if not user.is_active:
+        raise ProblemException(401, "Unauthorized", "This account is disabled.")
 
     # Verify membership still exists (not removed since token was issued), and
     # re-read role/status from the row rather than trusting the JWT's claims —

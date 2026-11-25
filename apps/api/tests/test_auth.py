@@ -239,3 +239,21 @@ def test_login_ignores_email_case(clean_registrations: None) -> None:
         "password": _PASSWORD,
     })
     assert r.status_code == 200
+
+
+def test_a_disabled_account_cannot_sign_in_or_keep_a_session(clean_registrations: None) -> None:
+    email = "regtest-disabled@example.com"
+    session = _register(email, "RegTest Disabled").json()
+    engine = create_engine(settings.database_url_direct)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE users SET is_active = false WHERE email = :e"), {"e": email})
+    engine.dispose()
+
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": _PASSWORD})
+    assert login.status_code == 403
+    me = client.get(
+        "/api/v1/me", headers={"Authorization": f"Bearer {session['access_token']}"}
+    )
+    assert me.status_code == 401
+    refresh = client.post("/api/v1/auth/refresh", json={"refresh_token": session["refresh_token"]})
+    assert refresh.status_code == 401

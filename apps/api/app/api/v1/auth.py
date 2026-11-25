@@ -157,6 +157,8 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     if not user or not verify_password(body.password, user.hashed_password):
         await record_login_failure(body.email, ip)
         raise ProblemException(401, "Unauthorized", "Invalid credentials.")
+    if not user.is_active:
+        raise ProblemException(403, "Forbidden", "This account is disabled.")
 
     # We know the user but not yet which tenant to act as — memberships' policy
     # lets a row through on user_id alone so this lookup can resolve that. A user
@@ -249,6 +251,10 @@ async def refresh(body: RefreshIn, db: DB) -> TokenOut:
         rt = await _chain_tail(db, rt)
 
     if not rt or rt.revoked or rt.expires_at < datetime.now(timezone.utc):
+        raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
+
+    owner = await db.get(User, rt.user_id)
+    if owner is None or not owner.is_active:
         raise ProblemException(401, "Unauthorized", "Invalid or expired refresh token.")
 
     tenant_id = rt.tenant_id
@@ -358,6 +364,8 @@ async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> Token
     elif not verify_password(body.password, user.hashed_password):
         # Existing account: `password` must authenticate it, not set a new one.
         raise ProblemException(401, "Unauthorized", "Incorrect password for existing account.")
+    if not user.is_active:
+        raise ProblemException(403, "Forbidden", "This account is disabled.")
 
     await set_rls_context(db, tenant_id=tenant_id, user_id=user.id, invite_token_hash=token_hash)
 
