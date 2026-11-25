@@ -44,7 +44,7 @@ endpoint) with per-call cost tracking and a monthly budget.
 | **Strategy generation** | Monthly strategy per client (summary, objectives with KPIs, channels, risks) grounded in retrieved knowledge, versioned, with the source chunks and the cost shown; figures the model quotes that were not in its input are flagged as warnings |
 | **Protection** | Per-user and per-tenant rate limits on strategy generation, uploads, re-index and search; structured JSON logs with request, tenant and job IDs and secret redaction |
 | **Onboarding** | A getting-started checklist on the dashboard (add a client, connect a model, generate a strategy) and a working New client button |
-| **Quality** | 334 API tests (83% coverage, 80% enforced in CI), 347 web unit tests, 8 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
+| **Quality** | 342 API tests (83% coverage, 80% enforced in CI), 350 web unit tests, 8 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
 
 Not built yet (see the [roadmap](#15-status-and-roadmap)): website audits and crawler, Google
 integrations, content generation, calendar, Kanban board, PDF reports, WordPress/Trello/Asana
@@ -209,7 +209,7 @@ The API reads `.env` from the repository root (or `apps/api`); real environment 
 | `DATABASE_URL` | yes | Runtime connection, as the non-owner `app_user` role (RLS enforced). `postgresql+asyncpg://…` |
 | `DATABASE_URL_DIRECT` | yes | Migrations, as the owner role (DDL, grants). `postgresql+psycopg://…` |
 | `APP_USER_DB_PASSWORD` | no | Password the migration sets for `app_user`. Change it outside local development. |
-| `REDIS_URL` | yes | Celery broker and result backend, rate limits, job progress events and stream tickets |
+| `REDIS_URL` | yes | Celery broker and result backend, rate limits, job progress events, stream tickets and strategy idempotency keys |
 | `JWT_SECRET` | yes | Signs access tokens (HS256). Use a long random value. |
 | `FERNET_KEYS` | yes | Comma-separated Fernet keys. The first encrypts, all decrypt (key rotation). Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `ALLOWED_ORIGINS` | no | CORS origins, default `http://localhost:3000` |
@@ -771,6 +771,12 @@ sequenceDiagram
   rationale), `risks[]` (risk and mitigation).
 - **Versioning:** regenerating creates a new version for that client and month, assigned under a
   row lock so concurrent requests queue instead of colliding.
+- **Safe retries:** send an `Idempotency-Key` header and a retried request returns the strategy
+  the first one made, without calling the model again. While the first is still running the retry
+  gets a 409; the same key with another client or month gets a 422; a failed generation frees the
+  key. Results are remembered in Redis for 24 hours. If Redis cannot be reached, a request that
+  carries a key gets a 503 and nothing is generated. The web app sends a key and reuses it until
+  that client and month succeed (a full page reload forgets it).
 - **Failure behaviour:** a failed or invalid generation stores nothing; the API returns 402
   (budget), 409 (no route, or unpriced model under a hard stop) or 502 (provider or schema
   failure), and the UI shows the message with a link to **AI models** where relevant.
@@ -859,7 +865,7 @@ signed-in member of the agency; roles are listed in [section 7.4](#74-roles-and-
 | | `POST /clients/{id}/documents` | admin, manager | Upload a file (multipart) or paste text (JSON); returns a `job_id`; accepts `Idempotency-Key` |
 | | `POST /documents/{id}/reindex`, `DELETE /documents/{id}` | admin, manager | Re-index (returns a `job_id`, accepts `Idempotency-Key`), delete |
 | | `POST /clients/{id}/search` | any | Hybrid search |
-| Strategies | `POST /clients/{id}/strategies` | admin, manager | Generate a new version |
+| Strategies | `POST /clients/{id}/strategies` | admin, manager | Generate a new version; accepts `Idempotency-Key` |
 | | `GET /clients/{id}/strategies`, `GET /strategies/{id}` | any | List, read |
 | Jobs | `GET /jobs`, `GET /jobs/{id}` | any | List (paginated, filter by `status` and `type`), read |
 | | `DELETE /jobs/{id}` | admin, manager | Cancel a queued or running job |
@@ -879,10 +885,10 @@ Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }
 
 | Layer | Tooling | What it covers | Count |
 | --- | --- | --- | --- |
-| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 334 tests (incl. isolation and eval), 83% coverage |
+| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 342 tests (incl. isolation and eval), 83% coverage |
 | Database isolation | pytest as the non-owner role | forced RLS on every tenant table: own rows visible, other tenants' invisible, no-context default deny, cross-tenant insert/update/delete refused, pooled-connection safety | in `tests/isolation/` |
 | Static checks | ruff, mypy, ESLint, `tsc` | lint, types | CI gates |
-| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules, job streaming | 347 tests |
+| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules, job streaming | 350 tests |
 | End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost; dashboard checklist and agency settings; live indexing progress; WCAG 2.1 A and AA axe scans | 8 tests |
 | Load smoke | `apps/api/scripts/load_smoke.py` | 50 concurrent users on read endpoints plus 5 concurrent indexing jobs; p95 target 300 ms | run by hand |
 | Retrieval quality | `rag_eval` | hit rate at k on a golden question set | runs inside pytest |
@@ -1024,7 +1030,7 @@ flowchart LR
 
 - Not built: password reset, notifications, and tenant data export and deletion.
 - Automatic brand profile indexing does not create a job, so that document is polled. Strategy
-  generation is not a job, so it has no progress stream or idempotency key.
+  generation is not a job, so it has no progress stream.
 - Rate limits allow requests when Redis is unreachable, by design.
 - The project runs on Python 3.10, and the fixed versions of three transitive dependencies
   (`pillow`, `dnspython`, `filelock`) need 3.11 or newer, so CI reports their advisories without
