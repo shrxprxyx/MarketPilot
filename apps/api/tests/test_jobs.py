@@ -250,6 +250,29 @@ def test_cancel_a_queued_job_and_the_worker_respects_it(
     assert doc["status"] == "failed" and "cancelled" in doc["error"]
 
 
+def test_cancelling_a_reindex_keeps_the_document_ready_and_searchable(
+    admin_token: str, tenant_id: UUID, client_id: str
+) -> None:
+    out = _add_doc(admin_token, client_id, "Zanzibar clove harvest notes.", title="Reindex Cx")
+    assert _run_worker(tenant_id, UUID(out["id"]), UUID(out["job_id"])) is True
+
+    again = client.post(f"/api/v1/documents/{out['id']}/reindex", headers=_auth(admin_token))
+    assert again.status_code == 202
+    job_id = again.json()["job_id"]
+    client.delete(f"/api/v1/jobs/{job_id}", headers=_auth(admin_token))
+    assert _run_worker(tenant_id, UUID(out["id"]), UUID(job_id)) is True
+
+    docs = client.get(f"/api/v1/clients/{client_id}/documents", headers=_auth(admin_token))
+    doc = next(d for d in docs.json()["items"] if d["id"] == out["id"])
+    assert doc["status"] == "ready" and doc["error"] is None
+    hits = client.post(
+        f"/api/v1/clients/{client_id}/search",
+        json={"query": "Zanzibar clove harvest"},
+        headers=_auth(admin_token),
+    ).json()["results"]
+    assert any(h["document_id"] == out["id"] for h in hits)
+
+
 def test_cancelling_a_finished_job_conflicts(
     admin_token: str, tenant_id: UUID, client_id: str
 ) -> None:

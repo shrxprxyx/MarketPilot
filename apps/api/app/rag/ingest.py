@@ -52,7 +52,7 @@ async def ingest_document(
         if state == "succeeded":  # a duplicate delivery of finished work
             return True
         if state == "cancelled":
-            await _mark_failed(db, tenant_id, document_id, CANCELLED_MESSAGE)
+            await _settle_cancelled(db, tenant_id, document_id)
             return True
         await update_job(
             db, tenant_id, job_id, status="running", progress=5, message="Reading the document"
@@ -107,7 +107,7 @@ async def ingest_document(
         return True
     except _Cancelled:
         await db.rollback()
-        await _mark_failed(db, tenant_id, document_id, CANCELLED_MESSAGE)
+        await _settle_cancelled(db, tenant_id, document_id)
         return True
     except Exception:
         logger.exception("Document ingestion failed", extra={"document_id": str(document_id)})
@@ -136,6 +136,20 @@ async def _set_document(
     if found:
         found.status, found.error = status, error
         await db.commit()
+
+
+async def _settle_cancelled(db: AsyncSession, tenant_id: UUID, document_id: UUID) -> None:
+    """A cancelled run leaves the document as it was: a re-index that was cancelled keeps its
+    earlier chunks, so it stays ready and searchable. Only a document that was never indexed
+    is marked failed, so the user knows to re-index it."""
+    await set_rls_context(db, tenant_id=tenant_id)
+    has_chunks = await db.scalar(
+        select(DocumentChunk.id).where(DocumentChunk.document_id == document_id).limit(1)
+    )
+    if has_chunks is not None:
+        await _set_document(db, tenant_id, document_id, "ready", None)
+    else:
+        await _mark_failed(db, tenant_id, document_id, CANCELLED_MESSAGE)
 
 
 async def _mark_failed(db: AsyncSession, tenant_id: UUID, document_id: UUID, error: str) -> None:
