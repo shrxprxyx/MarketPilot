@@ -57,3 +57,18 @@ def test_dates_and_identifiers_are_not_mistaken_for_figures() -> None:
 def test_warning_text_names_the_figure() -> None:
     warns = warnings_for(_plan("Revenue up 31%."), INPUT)
     assert len(warns) == 1 and "31%" in warns[0]
+
+
+def test_plan_structure_is_not_mistaken_for_a_metric() -> None:
+    plan = _plan(
+        "A 30-day push in 2027 with 20 posts over 52 weeks, reviewed after 180 days.",
+        objective="Grow the list in the first 90 days",
+        risk="Only 1 designer",
+        mitigation="Batch 40 assets",
+    )
+    assert ungrounded_figures(plan, INPUT) == []
+
+
+def test_larger_plain_numbers_and_percentages_are_still_flagged() -> None:
+    plan = _plan("Reach 1500 visitors, a 30% lift, in 90 days.")
+    assert ungrounded_figures(plan, INPUT) == ["1500", "30%"]

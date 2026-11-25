@@ -5,15 +5,18 @@ The prompt tells the model never to invent metrics. This verifies it. It scans t
 prose claims (summary, objective titles, channel and risk text) for figures and reports any
 that appear nowhere in the material the model was given. KPI targets are deliberately not
 scanned: a target such as "10% growth" is a proposal the strategist is asked to make, not a
-claim about the client. Small whole numbers (up to 12) are ignored unless they carry a % or $
-sign, since "3 channels" or "Q2" are structure, not metrics.
+claim about the client. Plain whole numbers under 100 ("3 channels", "20 posts", "30-day"),
+years, and any count of days, weeks, months, years or hours are ignored unless they carry a %
+or $ sign, since they describe the shape of the plan, not a metric about the client.
 """
 import re
 
 from app.strategy.schemas import StrategyPlan
 
 _NUMBER = re.compile(r"(?<![\w.])([$€£]?)(\d[\d,]*(?:\.\d+)?)(\s?%)?(?![\w])")
-SMALL_INT_MAX = 12
+PLAIN_INT_MAX = 99
+YEARS = range(1900, 2101)
+_TIME_UNIT = re.compile(r"[\s-]*(?:day|week|month|year|hour)s?(?![a-z])", re.IGNORECASE)
 
 
 def _value(raw: str) -> float | None:
@@ -30,6 +33,16 @@ def _numbers(text: str) -> set[float]:
         if v is not None:
             found.add(v)
     return found
+
+
+def _is_plan_structure(digits: str, value: float, after: str) -> bool:
+    """A figure that describes the plan's shape rather than claiming a metric: a small whole
+    number, a year, or a number of days, weeks, months, years or hours."""
+    if _TIME_UNIT.match(after):
+        return True
+    if "." in digits or "," in digits:
+        return False
+    return value <= PLAIN_INT_MAX or int(value) in YEARS
 
 
 def _claims(plan: StrategyPlan) -> list[str]:
@@ -51,10 +64,7 @@ def ungrounded_figures(plan: StrategyPlan, input_text: str) -> list[str]:
             value = _value(digits)
             if value is None or value in allowed:
                 continue
-            is_plain_small = (
-                not currency and not percent and "." not in digits and value <= SMALL_INT_MAX
-            )
-            if is_plain_small:
+            if not currency and not percent and _is_plan_structure(digits, value, text[m.end():]):
                 continue
             shown = f"{currency}{digits}{'%' if percent else ''}"
             if shown not in flagged:
