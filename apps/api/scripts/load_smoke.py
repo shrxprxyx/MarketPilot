@@ -5,21 +5,28 @@ target of p95 under 300 ms for reads. Exits 1 if the target is missed or any req
     cd apps/api
     uv run python scripts/load_smoke.py --base-url http://localhost:8000/api/v1
 
+The users are spread over several client processes (--procs, by default one per 10 users).
+One Python client process tops out at roughly 130-150 requests per second, so a single
+process with 50 users would mostly measure its own queue instead of the API.
+
 It registers a throwaway agency (e-mail load-<random>@example.com), so run it against a
 development database, never production. Needs the Celery worker for the indexing jobs to
 finish; without it the jobs are still created and the script reports them as queued.
 """
 import argparse
 import asyncio
+import json
 import random
 import secrets
 import statistics
+import subprocess
 import sys
 import time
 
 import httpx
 
 P95_TARGET_MS = 300.0
+USERS_PER_PROCESS = 10
 READ_PATHS = ("/me", "/clients", "/jobs", "/ai/connections", "/tenant")
 
 
@@ -56,7 +63,10 @@ async def _user(
         await asyncio.sleep(think_s * (0.5 + random.random()))  # a person reads between clicks
 
 
-async def main(base_url: str, users: int, seconds: int, jobs: int, think_ms: int) -> int:
+async def run(
+    base_url: str, users: int, seconds: int, jobs: int, think_ms: int
+) -> tuple[list[float], list[str], int, int]:
+    """One client process. Returns (latency samples in ms, errors, jobs finished, jobs accepted)."""
     suffix = secrets.token_hex(4)
     creds = {
         "email": f"load-{suffix}@example.com",
@@ -75,7 +85,6 @@ async def main(base_url: str, users: int, seconds: int, jobs: int, think_ms: int
         samples: list[float] = []
         errors: list[str] = []
         stop_at = time.monotonic() + seconds
-        print(f"{users} users reading for {seconds}s (think time ~{think_ms} ms), plus {jobs} jobs")
         job_calls = [
             http.post(
                 f"/clients/{client_id}/documents",
@@ -106,16 +115,58 @@ async def main(base_url: str, users: int, seconds: int, jobs: int, think_ms: int
                 break
             await asyncio.sleep(1)
 
+    return samples, errors, done, len(job_ids)
+
+
+def _spawn(argv: list[str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [sys.executable, __file__, "--child", *argv], stdout=subprocess.PIPE, text=True
+    )
+
+
+def main(a: argparse.Namespace) -> int:
+    procs = max(1, a.procs or -(-a.users // USERS_PER_PROCESS))
+    shares = [a.users // procs + (1 if i < a.users % procs else 0) for i in range(procs)]
+    print(
+        f"{a.users} users over {procs} client process(es) reading for {a.seconds}s "
+        f"(think time ~{a.think_ms} ms), plus {a.jobs} jobs"
+    )
+    children = [
+        _spawn(
+            [
+                "--base-url", a.base_url, "--users", str(share), "--seconds", str(a.seconds),
+                "--jobs", str(a.jobs if i == 0 else 0), "--think-ms", str(a.think_ms),
+            ]
+        )
+        for i, share in enumerate(shares)
+        if share > 0
+    ]
+    samples: list[float] = []
+    errors: list[str] = []
+    done = accepted = 0
+    for child in children:
+        out, _ = child.communicate()
+        try:
+            part = json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            errors.append("a client process produced no result")
+            continue
+        samples += part["samples"]
+        errors += part["errors"]
+        done += part["done"]
+        accepted += part["accepted"]
+
     if not samples:
         print("No successful requests.")
         return 1
     p95 = percentile(samples, 0.95)
-    print(f"requests: {len(samples)}  errors: {len(errors)}  ({len(samples) / seconds:.0f} req/s)")
+    rate = len(samples) / a.seconds
+    print(f"requests: {len(samples)}  errors: {len(errors)}  ({rate:.0f} req/s)")
     print(
         f"latency ms  p50={statistics.median(samples):.0f}  p95={p95:.0f}  "
         f"p99={percentile(samples, 0.99):.0f}  max={max(samples):.0f}"
     )
-    print(f"indexing jobs finished: {done}/{len(job_ids)}")
+    print(f"indexing jobs finished: {done}/{accepted}")
     for e in sorted(set(errors))[:5]:
         print("  error:", e)
     ok = p95 < P95_TARGET_MS and not errors
@@ -133,5 +184,14 @@ if __name__ == "__main__":
         "--think-ms", type=int, default=250,
         help="average pause between a user's requests (0 = saturation test, no pauses)",
     )
+    ap.add_argument(
+        "--procs", type=int, default=0,
+        help=f"client processes to spread the users over (default: one per {USERS_PER_PROCESS})",
+    )
+    ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
-    sys.exit(asyncio.run(main(a.base_url, a.users, a.seconds, a.jobs, a.think_ms)))
+    if a.child:  # one client process: print its raw results for the parent to merge
+        s_, e_, d_, n_ = asyncio.run(run(a.base_url, a.users, a.seconds, a.jobs, a.think_ms))
+        print(json.dumps({"samples": s_, "errors": e_, "done": d_, "accepted": n_}))
+        sys.exit(0)
+    sys.exit(main(a))

@@ -897,7 +897,10 @@ Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }
 # API (CI also enforces 80% coverage: add --cov=app)
 cd apps/api && uv run ruff check . && uv run mypy app && uv run pytest -q
 
-# Load smoke test against a running API (use a development database)
+# Load smoke test against a running API (use a development database). It spreads the users
+# over several client processes. Run the API with several workers (uvicorn --workers 4): a
+# single process serves about 100 req/s here. Indexing jobs share the CPU on one machine, so
+# use --jobs 0 to measure read latency alone.
 cd apps/api && uv run python scripts/load_smoke.py --base-url http://localhost:8000/api/v1
 
 # Web
