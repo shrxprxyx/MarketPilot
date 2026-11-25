@@ -16,6 +16,7 @@ from sqlalchemy import text
 import app.db.engine as db_engine
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password
+from app.auth.rate_limit import clear_login_attempts
 from app.db.rls import set_rls_context
 from app.main import app
 from app.models.membership import Membership
@@ -35,6 +36,7 @@ _TEST_EMAILS = (
     "new-invitee@example.com",
     "brand-new@example.com",
     "revoke-me@example.com",
+    "invites-guessed@example.com",
 )
 
 
@@ -56,7 +58,10 @@ def _cleanup() -> None:
     async def _delete() -> None:
         async with db_engine.AsyncSessionLocal() as session:
             await session.execute(
-                text("DELETE FROM tenants WHERE slug IN ('invites-co', 'other-invites-co')")
+                text(
+                    "DELETE FROM tenants "
+                    "WHERE slug IN ('invites-co', 'other-invites-co', 'guessed-co')"
+                )
             )
             placeholders = ", ".join(f"'{e}'" for e in _TEST_EMAILS)
             await session.execute(text(f"DELETE FROM users WHERE email IN ({placeholders})"))
@@ -172,6 +177,37 @@ def test_accept_invite_for_existing_user_requires_their_real_password(
         "/api/v1/me", headers=_auth(right.json()["access_token"])
     ).json()
     assert me["role"] == "manager"
+
+
+async def test_accept_invite_locks_out_password_guessing_for_an_existing_account(
+    admin_token: str,
+) -> None:
+    email = "invites-guessed@example.com"
+    _register({"email": email, "password": "guessedpass1", "tenant_name": "Guessed Co"})
+    await clear_login_attempts(email, "testclient")  # isolate from other test runs
+    token = client.post(
+        "/api/v1/members/invite",
+        json={"email": email, "role": "member"},
+        headers=_auth(admin_token),
+    ).json()["invite_token"]
+
+    for _ in range(5):
+        wrong = client.post(
+            "/api/v1/auth/accept-invite", json={"token": token, "password": "wrongpassword1"}
+        )
+        assert wrong.status_code == 401
+
+    # Even the right password is refused while locked out.
+    locked = client.post(
+        "/api/v1/auth/accept-invite", json={"token": token, "password": "guessedpass1"}
+    )
+    assert locked.status_code == 429
+
+    await clear_login_attempts(email, "testclient")
+    ok = client.post(
+        "/api/v1/auth/accept-invite", json={"token": token, "password": "guessedpass1"}
+    )
+    assert ok.status_code == 200, ok.text
 
 
 def test_cannot_invite_an_existing_member_of_the_same_tenant(admin_token: str) -> None:

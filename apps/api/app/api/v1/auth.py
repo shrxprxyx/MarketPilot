@@ -361,9 +361,15 @@ async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> Token
         user = User(email=invite.email, hashed_password=hash_password(body.password))
         db.add(user)
         await db.flush()
-    elif not verify_password(body.password, user.hashed_password):
-        # Existing account: `password` must authenticate it, not set a new one.
-        raise ProblemException(401, "Unauthorized", "Incorrect password for existing account.")
+    else:
+        # Existing account: `password` must authenticate it, not set a new one. That makes this
+        # a password oracle for anyone holding the invite, so it shares the login lockout.
+        ip = client_ip(request)
+        await enforce_login_rate_limit(user.email, ip)
+        if not verify_password(body.password, user.hashed_password):
+            await record_login_failure(user.email, ip)
+            raise ProblemException(401, "Unauthorized", "Incorrect password for existing account.")
+        await clear_login_attempts(user.email, ip)
     if not user.is_active:
         raise ProblemException(403, "Forbidden", "This account is disabled.")
 
