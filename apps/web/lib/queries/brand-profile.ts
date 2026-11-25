@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/problem";
 
 export type BrandProfile = {
   id: string;
@@ -15,12 +16,21 @@ export type BrandProfile = {
 
 export type BrandProfileInput = Omit<BrandProfile, "id" | "client_id">;
 
-// The API answers 404 until a profile has been saved; the form treats that as "empty".
-// No retry, so the empty form appears immediately instead of after three failed attempts.
+// The API answers 404 until a profile has been saved. That is a normal "empty" result, so it
+// resolves to null rather than an error: a refetch of an errored query with no data goes back
+// to "loading", which would unmount the form and discard what the user typed.
+// No retry, so real errors show immediately instead of after three failed attempts.
 export function useBrandProfile(clientId: string) {
   return useQuery({
     queryKey: ["brand-profile", clientId],
-    queryFn: () => apiFetch<BrandProfile>(`/clients/${clientId}/brand-profile`),
+    queryFn: async () => {
+      try {
+        return await apiFetch<BrandProfile>(`/clients/${clientId}/brand-profile`);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
     retry: false,
   });
 }

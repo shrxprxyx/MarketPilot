@@ -138,9 +138,8 @@ export function BrandProfileForm({ clientId }: { clientId: string }) {
   const { data, isLoading, error } = useBrandProfile(clientId);
 
   if (isLoading) return <Skeleton data-testid="profile-skeleton" className="h-72 w-full max-w-2xl" />;
-  // 404 only means "nothing saved yet": show an empty form. Any other error is a real failure.
-  const notSetYet = error instanceof ApiError && error.status === 404;
-  if (error && !notSetYet) {
+  // No profile saved yet resolves to null (empty form); anything else is a real failure.
+  if (error) {
     return <p className="text-sm text-muted-foreground">{detailOf(error)}</p>;
   }
   return (
@@ -148,7 +147,7 @@ export function BrandProfileForm({ clientId }: { clientId: string }) {
     <ProfileFields
       key={JSON.stringify(data ?? null)}
       clientId={clientId}
-      profile={notSetYet ? null : (data ?? null)}
+      profile={data ?? null}
       canWrite={canWrite}
     />
   );

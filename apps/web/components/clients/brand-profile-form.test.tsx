@@ -55,12 +55,11 @@ describe("BrandProfileForm", () => {
     expect(screen.getByTestId("profile-skeleton")).toBeInTheDocument();
   });
 
-  it("renders an empty editable form when no profile exists yet (404)", () => {
+  it("renders an empty editable form when no profile exists yet", () => {
     as("manager");
-    query = { isLoading: false, error: new ApiError(404, "Not Found", "Brand profile not set for this client.") };
+    query = { data: null, isLoading: false, error: null };
     render(<BrandProfileForm clientId="c1" />);
     expect(screen.getByLabelText("Voice")).toHaveValue("");
-    expect(screen.queryByText("Brand profile not set for this client.")).not.toBeInTheDocument();
   });
 
   it("shows the detail, not an empty form, for any other load error", () => {
@@ -123,7 +122,7 @@ describe("BrandProfileForm", () => {
   it("sends blank text as null and trims lists, dropping blank lines", async () => {
     as("manager");
     save.mockResolvedValue({});
-    query = { isLoading: false, error: new ApiError(404, "Not Found", "none") };
+    query = { data: null, isLoading: false, error: null };
     render(<BrandProfileForm clientId="c1" />);
     await userEvent.type(screen.getByLabelText("Voice"), "Warm");
     await userEvent.type(screen.getByLabelText("Keywords (one per line)"), "a{Enter}{Enter}  b  ");
