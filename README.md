@@ -39,12 +39,12 @@ endpoint) with per-call cost tracking and a monthly budget.
 | **Clients** | Create, edit, archive and restore clients; brand profile (voice, tone, audience, keywords, do and don't rules, sample text) |
 | **Knowledge base (RAG)** | Upload PDF, DOCX, TXT or Markdown (up to 10 MB) or paste text; background chunking and embedding tracked as a job with progress, cancellation and retries; `Idempotency-Key` on upload and re-index; duplicate skipping; re-index and delete; hybrid search (vector plus full-text, fused with RRF); the brand profile is indexed automatically |
 | **Background jobs** | A `jobs` table with tenant isolation; job status, list and cancel endpoints; live progress over Server-Sent Events, opened with a 60-second single-use stream ticket |
-| **AI gateway (BYOM)** | Encrypted connections to OpenAI, Anthropic, Ollama or OpenAI-compatible endpoints; Test button with model listing; per-task routing with fallback; native structured output with schema validation and repair; token streaming and embeddings in the provider adapters; retries and a deadline |
+| **AI gateway (BYOM)** | Encrypted connections to OpenAI, Anthropic, Ollama or OpenAI-compatible endpoints; Test button with model listing; per-task routing with fallback (a connection that a route uses cannot be deleted until the routing changes; analysis defaults to temperature 0.3, other tasks to 0.7); native structured output with schema validation and repair; token streaming and embeddings in the provider adapters; retries and a deadline |
 | **Usage, cost and budget** | Every call recorded (tokens, latency, estimated cost); usage dashboard grouped by day, client, task or model; monthly budget with an 80% warning and an optional hard stop; pre-flight cost estimate |
 | **Strategy generation** | Monthly strategy per client (summary, objectives with KPIs, channels, risks) grounded in retrieved knowledge, versioned, with the source chunks and the cost shown; figures the model quotes that were not in its input are flagged as warnings |
 | **Protection** | Per-user and per-tenant rate limits on strategy generation, uploads, re-index and search; structured JSON logs with request, tenant and job IDs and secret redaction |
 | **Onboarding** | A getting-started checklist on the dashboard (add a client, connect a model, generate a strategy) and a working New client button |
-| **Quality** | 342 API tests (83% coverage, 80% enforced in CI), 350 web unit tests, 8 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
+| **Quality** | 381 API tests (96% coverage, 80% enforced in CI), 353 web unit tests, 8 Playwright end-to-end tests including WCAG 2.1 A and AA axe scans, database-level isolation tests, a retrieval hit-rate evaluation, a load smoke script, CI on every push |
 
 Not built yet (see the [roadmap](#15-status-and-roadmap)): website audits and crawler, Google
 integrations, content generation, calendar, Kanban board, PDF reports, WordPress/Trello/Asana
@@ -214,6 +214,7 @@ The API reads `.env` from the repository root (or `apps/api`); real environment 
 | `FERNET_KEYS` | yes | Comma-separated Fernet keys. The first encrypts, all decrypt (key rotation). Generate: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `ALLOWED_ORIGINS` | no | CORS origins, default `http://localhost:3000` |
 | `ALLOW_PRIVATE_BASE_URLS` | no | `false` by default. Set `true` to let model connections point at loopback or private-network addresses (local Ollama). Link-local and metadata addresses are always refused. |
+| `TRUST_FORWARDED_FOR` | no | `false` by default. Set `true` when the API is only reached through the web app's proxy: the last `X-Forwarded-For` entry is then the caller's address for the login lockout and the audit log. Leave it off if the API is exposed directly. |
 | `RATE_LIMIT_SCALE` | no | Multiplies every per-user and per-tenant rate limit. Default `1`; leave it alone in production. The test suite raises it. |
 | `API_URL` (web) | no | Where Next.js proxies `/api/*`, default `http://localhost:8000/api/v1` |
 | `E2E_BASE_URL`, `E2E_DATABASE_URL` | tests | Playwright target and a `psql` URL for seeding (otherwise it uses `docker exec`) |
@@ -608,7 +609,7 @@ Notes on specific tables:
 ### 9.1 Clients and brand profile
 
 Admins and managers create clients (name, website, industry, goals) and fill in a brand profile.
-Clients are archived, not deleted (restore any time; generation is blocked while archived). Saving
+Clients are archived, not deleted (restore any time; generation and adding documents are blocked while archived). Saving
 a brand profile also **creates, updates or removes an auto-managed knowledge document** so the
 brand voice is searchable; that document cannot be deleted by hand.
 
@@ -885,10 +886,10 @@ Errors are RFC 7807 `application/problem+json`: `{ "status", "title", "detail" }
 
 | Layer | Tooling | What it covers | Count |
 | --- | --- | --- | --- |
-| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 342 tests (incl. isolation and eval), 83% coverage |
+| API unit and integration | pytest, real Postgres and Redis, real embeddings | auth, RBAC, tenants and branding, invites, clients, knowledge and retrieval, jobs and SSE, rate limits, AI connections and gateway, provider contracts (streaming and embeddings against recorded responses), budget, strategies and grounding, audit log, logging and redaction, prompt safety, SSRF guard, worker model registration | 381 tests (incl. isolation and eval), 96% coverage |
 | Database isolation | pytest as the non-owner role | forced RLS on every tenant table: own rows visible, other tenants' invisible, no-context default deny, cross-tenant insert/update/delete refused, pooled-connection safety | in `tests/isolation/` |
 | Static checks | ruff, mypy, ESLint, `tsc` | lint, types | CI gates |
-| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules, job streaming | 350 tests |
+| Web unit | Vitest + Testing Library | components, hooks, schemas, nav rules, job streaming | 353 tests |
 | End to end | Playwright (Chromium) against the full stack and a stub LLM | AI models and usage; budget warning, hard stop and recovery; client section with knowledge; strategy with sources and cost; dashboard checklist and agency settings; live indexing progress; WCAG 2.1 A and AA axe scans | 8 tests |
 | Load smoke | `apps/api/scripts/load_smoke.py` | 50 concurrent users on read endpoints plus 5 concurrent indexing jobs; p95 target 300 ms | run by hand |
 | Retrieval quality | `rag_eval` | hit rate at k on a golden question set | runs inside pytest |
