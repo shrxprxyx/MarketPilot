@@ -229,6 +229,45 @@ def test_file_upload_docx(admin_token: str, client_id: str) -> None:
     assert r.json()["source_type"] == "upload" and r.json()["title"] == "Voice guide"
 
 
+def test_file_text_is_extracted_off_the_event_loop(
+    admin_token: str, client_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_loop: list[bool] = []
+
+    def spy(filename: str, data: bytes) -> str:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:  # no running loop here means a worker thread
+            on_loop.append(False)
+        return extract_text(filename, data)
+
+    monkeypatch.setattr(knowledge_api, "extract_text", spy)
+    r = client.post(
+        f"/api/v1/clients/{client_id}/documents",
+        files={"file": ("notes.txt", b"Parsing must not block other requests.", "text/plain")},
+        headers=_auth(admin_token),
+    )
+    assert r.status_code == 202, r.text
+    assert on_loop == [False]
+
+
+def test_oversized_upload_is_refused_before_its_body_is_parsed(
+    admin_token: str, client_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def must_not_run(filename: str, data: bytes) -> str:
+        raise AssertionError("an oversized upload should never reach extraction")
+
+    monkeypatch.setattr(knowledge_api, "extract_text", must_not_run)
+    too_big = b"a" * (knowledge_api.MAX_UPLOAD_BYTES + 2 * 1024 * 1024)
+    r = client.post(
+        f"/api/v1/clients/{client_id}/documents",
+        files={"file": ("big.txt", too_big, "text/plain")},
+        headers=_auth(admin_token),
+    )
+    assert r.status_code == 413, r.text
+
+
 def test_upload_validation(admin_token: str, client_id: str) -> None:
     bad_type = client.post(
         f"/api/v1/clients/{client_id}/documents",

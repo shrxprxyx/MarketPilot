@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,7 @@ from app.rag.retrieval import search_chunks
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["knowledge"])
 INDEX_JOB = "document.index"
+MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 WRITER = require_role("admin", "manager")
@@ -113,13 +115,20 @@ async def _document_or_404(db: AsyncSession, current: CurrentUser, document_id: 
 async def _read_input(request: Request) -> tuple[str, str, str]:
     """Returns (title, text, source_type) from either a multipart upload or JSON text."""
     if request.headers.get("content-type", "").startswith("multipart/form-data"):
+        # Refuse an oversized body before it is read and spooled; the slack covers the
+        # multipart framing and the other form fields.
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES:
+            raise ProblemException(413, "Payload Too Large", "File is larger than 10 MB.")
         form = await request.form()
         upload: Any = form.get("file")
         if upload is None or not hasattr(upload, "read"):
             raise ProblemException(422, "Unprocessable Entity", "A 'file' field is required.")
         data = await upload.read(MAX_UPLOAD_BYTES + 1)
         try:
-            text = extract_text(upload.filename or "", data)
+            # PDF/DOCX parsing is CPU-bound: keep it off the event loop so other requests
+            # (and SSE streams) are not stalled while a large file is parsed.
+            text = await run_in_threadpool(extract_text, upload.filename or "", data)
         except ExtractionError as exc:
             raise ProblemException(422, "Unprocessable Entity", str(exc)) from exc
         title = str(form.get("title") or upload.filename or "Untitled")[:300]
