@@ -41,14 +41,32 @@ export function useStrategies(clientId: string) {
   });
 }
 
+// Idempotency keys of generations that have not succeeded yet, by client and month. Kept outside
+// the component so that leaving the tab and trying again still counts as the same request.
+const pendingKeys = new Map<string, string>();
+
+// randomUUID exists only on https and localhost; the fallback covers plain http on a LAN.
+const newKey = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
 export function useGenerateStrategy(clientId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { month: string }) =>
-      apiFetch<Strategy>(`/clients/${clientId}/strategies`, {
+    mutationFn: async (v: { month: string }) => {
+      const request = `${clientId}:${v.month}`;
+      const key = pendingKeys.get(request) ?? newKey();
+      pendingKeys.set(request, key);
+      // Retrying after a lost response reuses the key, so the API returns the strategy it
+      // already made instead of calling the model again. (It frees the key if it failed.)
+      const strategy = await apiFetch<Strategy>(`/clients/${clientId}/strategies`, {
         method: "POST",
+        headers: { "Idempotency-Key": key },
         body: JSON.stringify(v),
-      }),
+      });
+      pendingKeys.delete(request);
+      return strategy;
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["strategies", clientId] });
       qc.invalidateQueries({ queryKey: ["budget"] }); // a new call changes this month's spend
