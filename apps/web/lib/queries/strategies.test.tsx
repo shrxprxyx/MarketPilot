@@ -9,7 +9,7 @@ vi.mock("@/lib/api/client", () => ({
   apiFetch: async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
     if (init?.method === "POST" && postFails) throw new Error("connection lost");
-    return init?.method === "POST" ? { id: "s1" } : [];
+    return init?.method === "POST" ? { id: "s1" } : { items: [], next_cursor: null };
   },
 }));
 
@@ -31,7 +31,7 @@ describe("strategy hooks", () => {
   it("lists a client's strategies", async () => {
     const { result } = renderHook(() => useStrategies("c1"), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(calls[0].path).toBe("/clients/c1/strategies");
+    expect(calls[0].path).toBe("/clients/c1/strategies?limit=100");
   });
 
   it("generates with the month as JSON and refetches the list", async () => {

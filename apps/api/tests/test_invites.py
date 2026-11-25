@@ -116,7 +116,7 @@ def test_admin_can_create_invite_and_it_is_listed(admin_token: str) -> None:
     assert data["role"] == "manager"
     assert "invite_token" in data and len(data["invite_token"]) > 20
 
-    pending = client.get("/api/v1/members/invites", headers=_auth(admin_token)).json()
+    pending = client.get("/api/v1/members/invites", headers=_auth(admin_token)).json()["items"]
     assert any(i["email"] == "new-invitee@example.com" for i in pending)
 
 
@@ -236,6 +236,33 @@ def test_admin_can_revoke_a_pending_invite(admin_token: str) -> None:
     assert r2.status_code == 401
 
 
+def test_pending_invites_are_paged_by_cursor(admin_token: str) -> None:
+    for email in ("paged-one@example.com", "paged-two@example.com"):
+        r = client.post(
+            "/api/v1/members/invite",
+            json={"email": email, "role": "member"},
+            headers=_auth(admin_token),
+        )
+        assert r.status_code == 201, r.text
+    everything = client.get(
+        "/api/v1/members/invites?limit=100", headers=_auth(admin_token)
+    ).json()
+    assert everything["next_cursor"] is None and len(everything["items"]) >= 2
+
+    first = client.get("/api/v1/members/invites?limit=1", headers=_auth(admin_token)).json()
+    assert len(first["items"]) == 1 and first["next_cursor"]
+    second = client.get(
+        "/api/v1/members/invites",
+        params={"limit": 1, "cursor": first["next_cursor"]},
+        headers=_auth(admin_token),
+    ).json()
+    assert [first["items"][0]["id"], second["items"][0]["id"]] == [
+        i["id"] for i in everything["items"][:2]
+    ]
+    bad = client.get("/api/v1/members/invites?cursor=nonsense", headers=_auth(admin_token))
+    assert bad.status_code == 400
+
+
 def test_accept_invite_with_bad_token_returns_401() -> None:
     r = client.post(
         "/api/v1/auth/accept-invite",
@@ -256,7 +283,7 @@ def test_inviting_the_same_email_again_replaces_the_old_invite(admin_token: str)
         headers=_auth(admin_token),
     ).json()
 
-    pending = client.get("/api/v1/members/invites", headers=_auth(admin_token)).json()
+    pending = client.get("/api/v1/members/invites", headers=_auth(admin_token)).json()["items"]
     mine = [i for i in pending if i["email"] == "reissue@example.com"]
     assert [i["id"] for i in mine] == [second["id"]]
     assert mine[0]["role"] == "manager"

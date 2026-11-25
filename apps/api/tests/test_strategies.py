@@ -270,12 +270,32 @@ def test_regenerating_same_month_creates_next_version(
     assert _generate(admin_token, cid).json()["version"] == 1
     assert _generate(admin_token, cid).json()["version"] == 2
     assert _generate(admin_token, cid, "2027-02").json()["version"] == 1
-    listing = client.get(f"/api/v1/clients/{cid}/strategies", headers=_auth(admin_token)).json()
+    url = f"/api/v1/clients/{cid}/strategies"
+    listing = client.get(url, headers=_auth(admin_token)).json()["items"]
     assert [(s["month"], s["version"]) for s in listing] == [
         ("2027-02", 1),
         ("2026-12", 2),
         ("2026-12", 1),
     ]
+
+
+def test_strategy_list_is_paged_by_cursor(
+    admin_token: str, routed: None, mock_model: list[dict[str, Any]]
+) -> None:
+    cid = _new_client(admin_token, name="Paged Co")
+    for month in ("2026-11", "2026-12", "2027-01"):
+        assert _generate(admin_token, cid, month).status_code == 201
+    url = f"/api/v1/clients/{cid}/strategies"
+    first = client.get(url, params={"limit": 2}, headers=_auth(admin_token)).json()
+    assert [s["month"] for s in first["items"]] == ["2027-01", "2026-12"]
+    assert first["next_cursor"]
+    second = client.get(
+        url, params={"limit": 2, "cursor": first["next_cursor"]}, headers=_auth(admin_token)
+    ).json()
+    assert [s["month"] for s in second["items"]] == ["2026-11"]
+    assert second["next_cursor"] is None
+    bad = client.get(url, params={"cursor": "nonsense"}, headers=_auth(admin_token))
+    assert bad.status_code == 400
 
 
 def test_concurrent_generations_get_distinct_versions(
@@ -302,7 +322,8 @@ def test_invalid_model_output_returns_502_and_stores_nothing(
     r = _generate(admin_token, cid)
     assert r.status_code == 502, r.text
     assert "schema" in r.json()["detail"].lower()
-    listing = client.get(f"/api/v1/clients/{cid}/strategies", headers=_auth(admin_token)).json()
+    url = f"/api/v1/clients/{cid}/strategies"
+    listing = client.get(url, headers=_auth(admin_token)).json()["items"]
     assert listing == []
 
 
@@ -351,7 +372,7 @@ def test_member_can_read_but_not_generate(
     member = asyncio.run(_member_token(tenant_id))
     assert _generate(member, ready_client).status_code == 403
     listing = client.get(f"/api/v1/clients/{ready_client}/strategies", headers=_auth(member))
-    assert listing.status_code == 200 and listing.json()
+    assert listing.status_code == 200 and listing.json()["items"]
 
 
 def test_other_tenant_gets_404(
@@ -359,7 +380,7 @@ def test_other_tenant_gets_404(
 ) -> None:
     sid = client.get(
         f"/api/v1/clients/{ready_client}/strategies", headers=_auth(admin_token)
-    ).json()[0]["id"]
+    ).json()["items"][0]["id"]
     other = str(_register(_OTHER)["access_token"])
     assert _generate(other, ready_client).status_code == 404
     listing = client.get(f"/api/v1/clients/{ready_client}/strategies", headers=_auth(other))
@@ -426,7 +447,7 @@ def _new_key() -> str:
 
 
 def _versions(token: str, cid: str, month: str) -> list[int]:
-    rows = client.get(f"/api/v1/clients/{cid}/strategies", headers=_auth(token)).json()
+    rows = client.get(f"/api/v1/clients/{cid}/strategies", headers=_auth(token)).json()["items"]
     return sorted(s["version"] for s in rows if s["month"] == month)
 
 

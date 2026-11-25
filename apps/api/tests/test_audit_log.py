@@ -187,7 +187,7 @@ def test_accepted_invite_is_logged_against_the_new_membership(admin_token: str) 
         "/api/v1/audit-log", params={"limit": 50}, headers=_auth(admin_token)
     ).json()["items"]
     entry = next(e for e in entries if e["action"] == "invite.accepted")
-    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()
+    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()["items"]
     joiner = next(m for m in members if m["email"] == "audit-joiner@example.com")
     assert entry["entity"] == "membership"
     assert entry["entity_id"] == joiner["id"]

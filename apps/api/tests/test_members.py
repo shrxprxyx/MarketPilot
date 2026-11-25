@@ -40,6 +40,7 @@ _TEST_EMAILS = (
     "to-deactivate@example.com",
     "deactivated-login@example.com",
     "removable@example.com",
+    "members-paged@example.com",
 )
 
 
@@ -98,7 +99,7 @@ def tenant_id(admin_token: str) -> UUID:
 
 @pytest.fixture(scope="module")
 def admin_membership_id(tenant_id: UUID, admin_token: str) -> UUID:
-    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()
+    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()["items"]
     return UUID(next(m["id"] for m in members if m["role"] == "admin"))
 
 
@@ -113,8 +114,29 @@ def test_member_cannot_list_members(tenant_id: UUID) -> None:
 def test_admin_can_list_members(admin_token: str, tenant_id: UUID) -> None:
     r = client.get("/api/v1/members", headers=_auth(admin_token))
     assert r.status_code == 200
-    emails = {m["email"] for m in r.json()}
+    emails = {m["email"] for m in r.json()["items"]}
     assert "members-admin@example.com" in emails
+
+
+def test_member_list_is_paged_by_cursor(admin_token: str, tenant_id: UUID) -> None:
+    asyncio.run(_add_membership(tenant_id, "members-paged@example.com", "member"))
+    everything = client.get("/api/v1/members?limit=100", headers=_auth(admin_token)).json()
+    assert everything["next_cursor"] is None and len(everything["items"]) >= 2
+
+    walked: list[str] = []
+    cursor = None
+    while True:
+        params = {"limit": 1} | ({"cursor": cursor} if cursor else {})
+        page = client.get("/api/v1/members", params=params, headers=_auth(admin_token)).json()
+        assert len(page["items"]) == 1
+        walked.append(page["items"][0]["id"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert walked == [m["id"] for m in everything["items"]]
+
+    bad = client.get("/api/v1/members?cursor=nonsense", headers=_auth(admin_token))
+    assert bad.status_code == 400
 
 
 def test_admin_can_promote_member_to_manager(admin_token: str, tenant_id: UUID) -> None:
@@ -191,7 +213,7 @@ def test_admin_can_remove_a_member(admin_token: str, tenant_id: UUID) -> None:
     r = client.delete(f"/api/v1/members/{membership_id}", headers=_auth(admin_token))
     assert r.status_code == 204
 
-    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()
+    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()["items"]
     assert not any(m["id"] == str(membership_id) for m in members)
 
 

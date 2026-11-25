@@ -123,7 +123,7 @@ def test_me_tenants_lists_every_active_membership_with_role(
 def test_me_tenants_omits_deactivated_memberships(
     two_agency_user: str, secondary_token: str
 ) -> None:
-    members = client.get("/api/v1/members", headers=_auth(secondary_token)).json()
+    members = client.get("/api/v1/members", headers=_auth(secondary_token)).json()["items"]
     invited = next(m for m in members if m["email"] == _PRIMARY["email"])
     patched = client.patch(
         f"/api/v1/members/{invited['id']}",

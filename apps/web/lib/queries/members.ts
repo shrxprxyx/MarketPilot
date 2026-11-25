@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
+import { fetchAllPages } from "@/lib/api/pagination";
 import type { Role } from "@/lib/auth/session-store";
 
 export type Member = {
@@ -15,7 +16,7 @@ export type Member = {
 export function useMembers(enabled: boolean) {
   return useQuery({
     queryKey: ["members"],
-    queryFn: () => apiFetch<Member[]>("/members"),
+    queryFn: () => fetchAllPages<Member>("/members"),
     enabled,
   });
 }
@@ -39,7 +40,7 @@ export type CreatedInvite = {
 export function usePendingInvites(enabled: boolean) {
   return useQuery({
     queryKey: ["members", "invites"],
-    queryFn: () => apiFetch<PendingInvite[]>("/members/invites"),
+    queryFn: () => fetchAllPages<PendingInvite>("/members/invites"),
     enabled,
   });
 }

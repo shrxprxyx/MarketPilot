@@ -5,9 +5,9 @@ from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.gateway import BudgetExceededError, GatewayError, NoRouteError, UnpricedModelError
@@ -15,6 +15,7 @@ from app.auth.dependencies import CurrentUser, get_current_user, require_role
 from app.core import idempotency
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
+from app.core.pagination import decode_cursor, encode_cursor
 from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
 from app.db.session import get_db
@@ -27,7 +28,6 @@ router = APIRouter(tags=["strategies"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 WRITER = require_role("admin", "manager")
-LIST_LIMIT = 50
 IDEMPOTENCY_SCOPE = "strategy.generate"
 
 
@@ -52,6 +52,11 @@ class StrategyOut(BaseModel):
     tokens_out: int
     cost_usd: Decimal | None
     created_at: datetime
+
+
+class StrategyListOut(BaseModel):
+    items: list[StrategyOut]
+    next_cursor: str | None
 
 
 async def _client_or_404(db: AsyncSession, current: CurrentUser, client_id: UUID) -> Client:
@@ -144,18 +149,45 @@ async def _generate(
     return out
 
 
-@router.get("/clients/{client_id}/strategies", response_model=list[StrategyOut])
+@router.get("/clients/{client_id}/strategies", response_model=StrategyListOut)
 async def list_strategies(
-    client_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: DB
-) -> list[Strategy]:
+    client_id: UUID,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: DB,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> StrategyListOut:
+    """Newest month first, then newest version. The cursor is the last strategy returned."""
     await _client_or_404(db, current, client_id)
-    rows = await db.scalars(
+    stmt = (
         select(Strategy)
         .where(Strategy.client_id == client_id, Strategy.tenant_id == current.tenant_id)
         .order_by(Strategy.month.desc(), Strategy.version.desc())
-        .limit(LIST_LIMIT)
+        .limit(limit + 1)
     )
-    return list(rows)
+    if cursor:
+        try:
+            _, last_id = decode_cursor(cursor)
+        except ValueError as exc:
+            raise ProblemException(400, "Bad Request", "Invalid cursor.") from exc
+        last = (
+            await db.execute(
+                select(Strategy.month, Strategy.version).where(
+                    Strategy.id == last_id,
+                    Strategy.client_id == client_id,
+                    Strategy.tenant_id == current.tenant_id,
+                )
+            )
+        ).one_or_none()
+        if last is None:
+            raise ProblemException(400, "Bad Request", "Invalid cursor.")
+        stmt = stmt.where(tuple_(Strategy.month, Strategy.version) < (last.month, last.version))
+    rows = list(await db.scalars(stmt))
+    page = rows[:limit]
+    next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+    return StrategyListOut(
+        items=[StrategyOut.model_validate(r) for r in page], next_cursor=next_cursor
+    )
 
 
 @router.get("/strategies/{strategy_id}", response_model=StrategyOut)

@@ -167,7 +167,7 @@ def test_deactivating_a_membership_blocks_switching_to_it(
     secondary_admin_token = _register(_SECONDARY_ADMIN)["access_token"]
     members = client.get(
         "/api/v1/members", headers=_auth(secondary_admin_token)
-    ).json()
+    ).json()["items"]
     target = next(m for m in members if m["email"] == _PRIMARY_ADMIN["email"])
 
     client.patch(

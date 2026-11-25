@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api/client";
+import { fetchAllPages } from "@/lib/api/pagination";
 
 export type StrategyPlan = {
   summary: string;
@@ -37,7 +38,7 @@ export type Strategy = {
 export function useStrategies(clientId: string) {
   return useQuery({
     queryKey: ["strategies", clientId],
-    queryFn: () => apiFetch<Strategy[]>(`/clients/${clientId}/strategies`),
+    queryFn: () => fetchAllPages<Strategy>(`/clients/${clientId}/strategies`),
   });
 }
 

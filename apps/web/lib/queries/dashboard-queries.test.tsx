@@ -9,7 +9,7 @@ const calls: string[] = [];
 vi.mock("@/lib/api/client", () => ({
   apiFetch: async (path: string) => {
     calls.push(path);
-    return [];
+    return path.startsWith("/members") ? { items: [], next_cursor: null } : [];
   },
 }));
 
@@ -32,7 +32,7 @@ describe("dashboard query hooks", () => {
     renderHook(() => [useAiConnections(true), useAiUsage(true), useMembers(true)], { wrapper });
     await waitFor(() => expect(calls).toHaveLength(3));
     expect(calls).toEqual(
-      expect.arrayContaining(["/ai/connections", "/ai/usage?group_by=day&days=30", "/members"]),
+      expect.arrayContaining(["/ai/connections", "/ai/usage?group_by=day&days=30", "/members?limit=100"]),
     );
   });
 

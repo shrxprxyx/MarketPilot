@@ -3,9 +3,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_role
@@ -13,6 +13,7 @@ from app.auth.jwt import invite_token_expiry, make_invite_token
 from app.core.audit import log_audit
 from app.core.email import NormalizedEmail
 from app.core.errors import ProblemException
+from app.core.pagination import decode_cursor, encode_cursor
 from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.invite import Invite
@@ -37,6 +38,11 @@ class MemberOut(BaseModel):
     role: str
     status: str
     created_at: datetime
+
+
+class MemberListOut(BaseModel):
+    items: list[MemberOut]
+    next_cursor: str | None
 
 
 class MemberPatch(BaseModel):
@@ -68,6 +74,18 @@ class PendingInviteOut(BaseModel):
     role: str
     expires_at: datetime
     created_at: datetime
+
+
+class PendingInviteListOut(BaseModel):
+    items: list[PendingInviteOut]
+    next_cursor: str | None
+
+
+def _cursor_or_400(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        return decode_cursor(cursor)
+    except ValueError as exc:
+        raise ProblemException(400, "Bad Request", "Invalid cursor.") from exc
 
 
 async def _get_membership_or_404(
@@ -103,30 +121,42 @@ async def _is_last_active_admin(db: AsyncSession, tenant_id: UUID, membership: M
     return all(admin_id == membership.id for admin_id in active_admin_ids)
 
 
-@router.get("", response_model=list[MemberOut])
+@router.get("", response_model=MemberListOut)
 async def list_members(
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
-) -> list[MemberOut]:
-    rows = (
-        await db.execute(
-            select(Membership, User.email)
-            .join(User, User.id == Membership.user_id)
-            .where(Membership.tenant_id == current.tenant_id)
-            .order_by(Membership.created_at.asc())
-        )
-    ).all()
-    return [
-        MemberOut(
-            id=m.id,
-            user_id=m.user_id,
-            email=email,
-            role=m.role,
-            status=m.status,
-            created_at=m.created_at,
-        )
-        for m, email in rows
-    ]
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> MemberListOut:
+    stmt = (
+        select(Membership, User.email)
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.tenant_id == current.tenant_id)
+        .order_by(Membership.created_at.asc(), Membership.id.asc())
+        .limit(limit + 1)
+    )
+    if cursor:
+        created_at, row_id = _cursor_or_400(cursor)
+        stmt = stmt.where(tuple_(Membership.created_at, Membership.id) > (created_at, row_id))
+    rows = (await db.execute(stmt)).all()
+    page = rows[:limit]
+    next_cursor = (
+        encode_cursor(page[-1][0].created_at, page[-1][0].id) if len(rows) > limit else None
+    )
+    return MemberListOut(
+        items=[
+            MemberOut(
+                id=m.id,
+                user_id=m.user_id,
+                email=email,
+                role=m.role,
+                status=m.status,
+                created_at=m.created_at,
+            )
+            for m, email in page
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @router.patch("/{membership_id}", response_model=MemberOut)
@@ -272,19 +302,28 @@ async def create_invite(
     )
 
 
-@router.get("/invites", response_model=list[PendingInviteOut])
+@router.get("/invites", response_model=PendingInviteListOut)
 async def list_invites(
     current: Annotated[CurrentUser, ADMIN],
     db: DB,
-) -> list[PendingInviteOut]:
-    rows = (
-        await db.execute(
-            select(Invite)
-            .where(Invite.tenant_id == current.tenant_id, Invite.status == "pending")
-            .order_by(Invite.created_at.desc())
-        )
-    ).scalars().all()
-    return [PendingInviteOut.model_validate(i) for i in rows]
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> PendingInviteListOut:
+    stmt = (
+        select(Invite)
+        .where(Invite.tenant_id == current.tenant_id, Invite.status == "pending")
+        .order_by(Invite.created_at.desc(), Invite.id.desc())
+        .limit(limit + 1)
+    )
+    if cursor:
+        created_at, row_id = _cursor_or_400(cursor)
+        stmt = stmt.where(tuple_(Invite.created_at, Invite.id) < (created_at, row_id))
+    rows = list((await db.execute(stmt)).scalars().all())
+    page = rows[:limit]
+    next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+    return PendingInviteListOut(
+        items=[PendingInviteOut.model_validate(i) for i in page], next_cursor=next_cursor
+    )
 
 
 @router.delete("/invites/{invite_id}", status_code=204)
