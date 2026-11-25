@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 export const REFRESH_COOKIE = "mp_refresh";
-const THIRTY_DAYS = 60 * 60 * 24 * 30; // matches the API's refresh token lifetime
+const SEVEN_DAYS = 60 * 60 * 24 * 7; // matches the API's refresh token lifetime
 
 const apiUrl = () => process.env.API_URL ?? "http://localhost:8000/api/v1";
 
@@ -15,7 +15,7 @@ function setRefreshCookie(res: NextResponse, token: string) {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: THIRTY_DAYS,
+    maxAge: SEVEN_DAYS,
   });
 }
 

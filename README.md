@@ -345,7 +345,7 @@ sequenceDiagram
     A->>R: check lockout (5 failures per minute per IP+email)
     A->>A: verify Argon2 hash
     A-->>N: access token (15 min) + refresh token
-    N->>N: Set-Cookie mp_refresh (HttpOnly, SameSite=Lax, Secure in production, 30 days)
+    N->>N: Set-Cookie mp_refresh (HttpOnly, SameSite=Lax, Secure in production, 7 days)
     N-->>B: access token only (JSON body)
     Note over B: access token kept in memory only (Zustand), never in storage
     B->>A: GET /api/... with Bearer access token

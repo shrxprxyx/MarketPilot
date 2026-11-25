@@ -8,7 +8,7 @@ from app.config import settings
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 INVITE_EXPIRE_DAYS = 7
 
 
@@ -22,6 +22,7 @@ def create_access_token(
         "sub": str(user_id),
         "tenant_id": str(tenant_id),   # was "tenant" — must match what get_current_user reads
         "role": role,
+        "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
