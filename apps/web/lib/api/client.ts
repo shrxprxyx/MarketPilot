@@ -33,7 +33,7 @@ export function refreshSession(): Promise<boolean> {
 
 async function doRefresh(): Promise<boolean> {
   try {
-    const refreshed = await send("/auth/refresh", { method: "POST" });
+    const refreshed = await send("/auth/refresh", { method: "POST", headers: { "x-mp-csrf": "1" } });
     if (!refreshed.ok) {
       useSession.getState().clear();
       return false;

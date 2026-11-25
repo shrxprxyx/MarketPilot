@@ -10,6 +10,7 @@ function req(path: string, body?: unknown, cookie?: string) {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      "x-mp-csrf": "1",
       ...(cookie ? { cookie: `${REFRESH_COOKIE}=${cookie}` } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -79,6 +80,31 @@ describe("refresh handler", () => {
     const res = await refresh(req("/api/auth/refresh", undefined, "stale"));
     expect(res.status).toBe(401);
     expect(res.headers.get("set-cookie")).toMatch(new RegExp(`${REFRESH_COOKIE}=;|Max-Age=0|Expires=Thu, 01 Jan 1970`, "i"));
+  });
+});
+
+describe("refresh handler: CSRF header and client address", () => {
+  it("refuses a refresh without the custom header, without calling the API", async () => {
+    const fetchMock = apiReturns(200, { access_token: "A", refresh_token: "R" });
+    const bare = new NextRequest("http://localhost:3000/api/auth/refresh", {
+      method: "POST",
+      headers: { cookie: `${REFRESH_COOKIE}=R1` },
+    });
+    const res = await refresh(bare);
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the browser's address on to the API", async () => {
+    const fetchMock = apiReturns(200, { access_token: "A", refresh_token: "R" });
+    const r = new NextRequest("http://localhost:3000/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+      body: JSON.stringify({ email: "a@b.co", password: "pw" }),
+    });
+    await login(r);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(new Headers(init?.headers).get("x-forwarded-for")).toBe("203.0.113.9");
   });
 });
 
