@@ -267,3 +267,45 @@ def test_member_cannot_write_brand_profile(admin_token: str, member_token: str) 
         headers=_auth(member_token),
     )
     assert r.status_code == 403
+
+
+@pytest.mark.parametrize("url", ["javascript:alert(1)", "ftp://acme.test", "acme.test"])
+def test_website_must_be_an_http_address(admin_token: str, url: str) -> None:
+    r = client.post(
+        "/api/v1/clients",
+        json={"name": "Bad Url Co", "website_url": url},
+        headers=_auth(admin_token),
+    )
+    assert r.status_code == 422
+
+
+def _create_with_goals(admin_token: str, goals: list[str]) -> int:
+    r = client.post(
+        "/api/v1/clients",
+        json={"name": "Goals Limit Co", "goals": goals},
+        headers=_auth(admin_token),
+    )
+    return r.status_code
+
+
+def test_goals_are_limited_in_number_and_length(admin_token: str) -> None:
+    assert _create_with_goals(admin_token, ["g"] * 21) == 422
+    assert _create_with_goals(admin_token, ["g" * 301]) == 422
+    assert _create_with_goals(admin_token, ["  "]) == 422
+
+
+def test_editing_a_client_applies_the_same_limits(admin_token: str) -> None:
+    created = client.post(
+        "/api/v1/clients", json={"name": "Edit Limits Co"}, headers=_auth(admin_token)
+    ).json()
+    url = f"/api/v1/clients/{created['id']}"
+    bad = client.patch(url, json={"website_url": "javascript:alert(1)"}, headers=_auth(admin_token))
+    ok = client.patch(
+        url,
+        json={"website_url": " https://ok.test ", "goals": [" grow "]},
+        headers=_auth(admin_token),
+    )
+    assert bad.status_code == 422
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["website_url"] == "https://ok.test"
+    assert ok.json()["goals"] == ["grow"]

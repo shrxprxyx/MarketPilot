@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,19 +32,38 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 WRITER = require_role("admin", "manager")
 
 
+# Goals go into the AI prompt and the retrieval query, so they are kept short and few.
+Goal = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+Goals = Annotated[list[Goal], Field(max_length=20)]
+
+
+def _http_url(v: str | None) -> str | None:
+    """Only web addresses: the URL is shown as a link and later crawled."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v.lower().startswith(("http://", "https://")):
+        raise ValueError("Website must start with http:// or https://")
+    return v
+
+
 class ClientIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     website_url: str | None = Field(default=None, max_length=500)
     industry: str | None = Field(default=None, max_length=120)
-    goals: list[str] | None = None
+    goals: Goals | None = None
+
+    _check_url = field_validator("website_url")(_http_url)
 
 
 class ClientPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     website_url: str | None = Field(default=None, max_length=500)
     industry: str | None = Field(default=None, max_length=120)
-    goals: list[str] | None = None
+    goals: Goals | None = None
     status: Literal["active", "archived"] | None = None
+
+    _check_url = field_validator("website_url")(_http_url)
 
 
 class ClientOut(BaseModel):
