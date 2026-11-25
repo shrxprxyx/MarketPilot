@@ -26,7 +26,11 @@ _ADMIN = {
     "password": "auditadmin1",
     "tenant_name": "Audit Co",
 }
-_TEST_EMAILS = ("audit-admin@example.com", "audit-member@example.com")
+_TEST_EMAILS = (
+    "audit-admin@example.com",
+    "audit-member@example.com",
+    "audit-joiner@example.com",
+)
 
 
 def _register(creds: dict) -> dict:
@@ -160,10 +164,33 @@ def test_invite_created_and_client_archived_are_logged(admin_token: str) -> None
     ).json()["items"]
     invite_entry = next(e for e in entries if e["action"] == "invite.created")
     assert invite_entry["meta"]["email"] == "audit-invitee@example.com"
+    assert invite_entry["entity_id"] == invite["id"]
     archive_entry = next(e for e in entries if e["action"] == "client.archived")
     assert archive_entry["entity_id"] == created_client["id"]
 
     client.delete(f"/api/v1/members/invites/{invite['id']}", headers=_auth(admin_token))
+
+
+def test_accepted_invite_is_logged_against_the_new_membership(admin_token: str) -> None:
+    invite = client.post(
+        "/api/v1/members/invite",
+        json={"email": "audit-joiner@example.com", "role": "member"},
+        headers=_auth(admin_token),
+    ).json()
+    accepted = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": invite["invite_token"], "password": "password123"},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    entries = client.get(
+        "/api/v1/audit-log", params={"limit": 50}, headers=_auth(admin_token)
+    ).json()["items"]
+    entry = next(e for e in entries if e["action"] == "invite.accepted")
+    members = client.get("/api/v1/members", headers=_auth(admin_token)).json()
+    joiner = next(m for m in members if m["email"] == "audit-joiner@example.com")
+    assert entry["entity"] == "membership"
+    assert entry["entity_id"] == joiner["id"]
 
 
 def test_audit_log_filters_by_action(admin_token: str) -> None:

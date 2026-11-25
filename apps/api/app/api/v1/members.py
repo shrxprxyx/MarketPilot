@@ -4,13 +4,14 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, require_role
 from app.auth.jwt import invite_token_expiry, make_invite_token
 from app.core.audit import log_audit
+from app.core.email import NormalizedEmail
 from app.core.errors import ProblemException
 from app.core.request import client_ip
 from app.db.session import get_db
@@ -44,7 +45,7 @@ class MemberPatch(BaseModel):
 
 
 class InviteIn(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
     role: Role
 
 
@@ -210,7 +211,7 @@ async def create_invite(
     existing = await db.scalar(
         select(Membership)
         .join(User, User.id == Membership.user_id)
-        .where(Membership.tenant_id == current.tenant_id, User.email == body.email)
+        .where(Membership.tenant_id == current.tenant_id, func.lower(User.email) == body.email)
     )
     if existing:
         raise ProblemException(
@@ -230,6 +231,7 @@ async def create_invite(
         expires_at=invite_token_expiry(),
     )
     db.add(invite)
+    await db.flush()  # assigns invite.id so the audit row can reference it
 
     log_audit(
         db,

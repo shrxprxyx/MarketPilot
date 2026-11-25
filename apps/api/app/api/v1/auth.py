@@ -1,12 +1,14 @@
 import hashlib
 import logging
+import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import CurrentUser, get_current_user
@@ -23,6 +25,7 @@ from app.auth.rate_limit import (
 )
 from app.auth.stream_ticket import TTL_SECONDS, issue_ticket
 from app.core.audit import log_audit
+from app.core.email import NormalizedEmail
 from app.core.errors import ProblemException
 from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
@@ -45,9 +48,17 @@ OWNER_ROLE = "admin"
 
 
 class RegisterIn(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
     password: str = Field(min_length=10)
-    tenant_name: str
+    tenant_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("tenant_name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Agency name cannot be blank.")
+        return v
 
 
 class TokenOut(BaseModel):
@@ -57,7 +68,7 @@ class TokenOut(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: EmailStr
+    email: NormalizedEmail
     password: str
 
 
@@ -77,16 +88,29 @@ class SwitchTenantIn(BaseModel):
     tenant_id: UUID
 
 
+SLUG_MAX = 80
+
+
+async def _unique_slug(db: AsyncSession, name: str) -> str:
+    """URL-safe slug from the agency name. Agencies may share a name, so a taken slug gets a
+    short random suffix instead of failing the registration."""
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[: SLUG_MAX - 7] or "agency"
+    slug = base
+    while await db.scalar(select(Tenant.id).where(Tenant.slug == slug)):
+        slug = f"{base}-{secrets.token_hex(3)}"
+    return slug
+
+
 @router.post("/register", response_model=TokenOut, status_code=201)
 async def register(body: RegisterIn, request: Request, db: DB) -> TokenOut:
-    existing = await db.scalar(select(User).where(User.email == body.email))
+    existing = await db.scalar(select(User).where(func.lower(User.email) == body.email))
     if existing:
         raise ProblemException(409, "Conflict", "Email already registered.")
 
     user = User(email=body.email, hashed_password=hash_password(body.password))
     db.add(user)
 
-    tenant = Tenant(name=body.tenant_name, slug=body.tenant_name.lower().replace(" ", "-"))
+    tenant = Tenant(name=body.tenant_name, slug=await _unique_slug(db, body.tenant_name))
     db.add(tenant)
 
     await db.flush()
@@ -129,7 +153,7 @@ async def login(body: LoginIn, request: Request, db: DB) -> TokenOut:
     ip = client_ip(request)
     await enforce_login_rate_limit(body.email, ip)
 
-    user = await db.scalar(select(User).where(User.email == body.email))
+    user = await db.scalar(select(User).where(func.lower(User.email) == body.email))
     if not user or not verify_password(body.password, user.hashed_password):
         await record_login_failure(body.email, ip)
         raise ProblemException(401, "Unauthorized", "Invalid credentials.")
@@ -326,7 +350,7 @@ async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> Token
     role = invite.role
     invited_by = invite.invited_by
 
-    user = await db.scalar(select(User).where(User.email == invite.email))
+    user = await db.scalar(select(User).where(func.lower(User.email) == invite.email.lower()))
     if user is None:
         user = User(email=invite.email, hashed_password=hash_password(body.password))
         db.add(user)
@@ -345,6 +369,7 @@ async def accept_invite(body: AcceptInviteIn, request: Request, db: DB) -> Token
 
     membership = Membership(user_id=user.id, tenant_id=tenant_id, role=role, invited_by=invited_by)
     db.add(membership)
+    await db.flush()  # assigns membership.id so the audit row can reference it
     await db.delete(invite)  # one-time use
 
     raw = make_refresh_token()

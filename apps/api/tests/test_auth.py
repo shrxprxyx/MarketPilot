@@ -1,5 +1,8 @@
 import hashlib
+from collections.abc import Iterator
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
@@ -166,3 +169,73 @@ async def test_login_locks_out_after_five_failures() -> None:
     assert r.status_code == 429
 
     await clear_login_attempts(email, "testclient")
+
+def _purge_registration_probes() -> None:
+    """Remove the agencies and users the registration tests below create."""
+    engine = create_engine(settings.database_url_direct)
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM tenants WHERE name LIKE 'RegTest %'"))
+        conn.execute(text("DELETE FROM users WHERE email LIKE 'regtest-%@example.com'"))
+    engine.dispose()
+
+
+@pytest.fixture
+def clean_registrations() -> Iterator[None]:
+    _purge_registration_probes()
+    yield
+    _purge_registration_probes()
+
+
+def _register(email: str, tenant_name: str) -> httpx.Response:
+    return client.post("/api/v1/auth/register", json={
+        "email": email,
+        "password": _PASSWORD,
+        "tenant_name": tenant_name,
+    })
+
+
+def _slug_of(tenant_name: str) -> str:
+    engine = create_engine(settings.database_url_direct)
+    with engine.begin() as conn:
+        slugs = conn.execute(
+            text("SELECT slug FROM tenants WHERE name = :n ORDER BY created_at"),
+            {"n": tenant_name},
+        ).scalars().all()
+    engine.dispose()
+    return str(slugs[-1])
+
+
+def test_two_agencies_can_share_a_name(clean_registrations: None) -> None:
+    """Agency names are not unique; the second one gets a distinct slug, not a 500."""
+    first = _register("regtest-one@example.com", "RegTest Same Name")
+    second = _register("regtest-two@example.com", "RegTest same  name")
+    third = _register("regtest-three@example.com", "RegTest Same Name")
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert third.status_code == 201
+    assert _slug_of("RegTest Same Name") != "regtest-same-name"
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 121])
+def test_register_rejects_a_blank_or_oversized_agency_name(name: str) -> None:
+    assert _register("regtest-bad@example.com", name).status_code == 422
+
+
+def test_register_slug_is_url_safe(clean_registrations: None) -> None:
+    assert _register("regtest-slug@example.com", "RegTest  Ünï & Co.!").status_code == 201
+    assert _slug_of("RegTest  Ünï & Co.!") == "regtest-n-co"
+
+
+def test_email_case_does_not_create_a_second_account(clean_registrations: None) -> None:
+    assert _register("regtest-Case@Example.com", "RegTest Case One").status_code == 201
+    again = _register("REGTEST-case@example.com", "RegTest Case Two")
+    assert again.status_code == 409
+
+
+def test_login_ignores_email_case(clean_registrations: None) -> None:
+    assert _register("regtest-login@example.com", "RegTest Login").status_code == 201
+    r = client.post("/api/v1/auth/login", json={
+        "email": "RegTest-LOGIN@example.com",
+        "password": _PASSWORD,
+    })
+    assert r.status_code == 200
