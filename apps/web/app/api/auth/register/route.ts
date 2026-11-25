@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
-import { forwardTokenCall } from "@/lib/auth/server";
+import { clientHeaders, forwardTokenCall } from "@/lib/auth/server";
 
 export async function POST(req: NextRequest) {
-  return forwardTokenCall("/auth/register", await req.json().catch(() => ({})));
+  return forwardTokenCall("/auth/register", await req.json().catch(() => ({})), clientHeaders(req));
 }
