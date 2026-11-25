@@ -78,6 +78,9 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["app"]
+# SQLAlchemy's async layer runs code on greenlets and TestClient runs the app on another
+# thread; without these, everything after the first awaited query is reported as uncovered.
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 # SRS NFR-08: at least 80 percent on the core modules (auth, tenancy, ai gateway, rag).
