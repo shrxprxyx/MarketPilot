@@ -153,7 +153,9 @@ async def add_document(
     client_id: UUID, request: Request, current: Annotated[CurrentUser, WRITER], db: DB
 ) -> UploadOut:
     """Upload a file (multipart `file`) or paste text (JSON). Indexing runs in the worker."""
-    await _client_or_404(db, current, client_id)
+    client = await _client_or_404(db, current, client_id)
+    if client.status == "archived":
+        raise ProblemException(409, "Conflict", "Restore this client before adding documents.")
     key = validate_idempotency_key(request.headers.get("Idempotency-Key"))
     title, text, source_type = await _read_input(request)
 

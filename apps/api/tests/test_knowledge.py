@@ -363,3 +363,16 @@ def test_cross_tenant_isolation(admin_token: str, client_id: str) -> None:
 
     doc = _add_text(admin_token, client_id, "Mine only", "Private marmalade recipe notes.").json()
     assert client.delete(f"/api/v1/documents/{doc['id']}", headers=_auth(other)).status_code == 404
+
+
+def test_archived_client_refuses_new_documents_until_restored(admin_token: str) -> None:
+    cid = client.post(
+        "/api/v1/clients", json={"name": "Archived KB Co"}, headers=_auth(admin_token)
+    ).json()["id"]
+    assert client.delete(f"/api/v1/clients/{cid}", headers=_auth(admin_token)).status_code == 204
+    r = _add_text(admin_token, cid, "Late", "Added after archiving.")
+    assert r.status_code == 409
+    assert "Restore" in r.json()["detail"]
+
+    client.patch(f"/api/v1/clients/{cid}", json={"status": "active"}, headers=_auth(admin_token))
+    assert _add_text(admin_token, cid, "Late", "Added after archiving.").status_code == 202
