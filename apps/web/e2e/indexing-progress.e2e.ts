@@ -4,6 +4,9 @@ import { registerAgency } from "./helpers";
 // Needs the Celery worker. The text is large (hundreds of passages) so that indexing lasts long
 // enough to watch: this proves progress reaches the browser live, through the Next.js proxy.
 test("indexing progress streams to the knowledge tab", async ({ page }) => {
+  // Embedding the text is CPU-bound and took 14 to 47 s across runs; the dev server's first-visit
+  // compiles add about 30 s of setup. The shared 90 s limit left almost no margin.
+  test.setTimeout(180_000);
   await registerAgency(page, "progress");
   await page.goto("/clients");
   await page.getByRole("button", { name: "New client" }).first().click();
@@ -30,6 +33,6 @@ test("indexing progress streams to the knowledge tab", async ({ page }) => {
   await expect(bar).toBeVisible();
 
   const row = page.getByRole("tabpanel").getByRole("listitem").filter({ hasText: "Big handbook" });
-  await expect(row.getByText("Ready", { exact: true })).toBeVisible({ timeout: 80_000 });
+  await expect(row.getByText("Ready", { exact: true })).toBeVisible({ timeout: 150_000 });
   await expect(bar).toHaveCount(0);
 });
