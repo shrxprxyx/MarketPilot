@@ -12,11 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.gateway import BudgetExceededError, GatewayError, NoRouteError, UnpricedModelError
 from app.auth.dependencies import CurrentUser, get_current_user, require_role
+from app.core import idempotency
 from app.core.audit import log_audit
 from app.core.errors import ProblemException
 from app.core.rate_limit import rate_limit
 from app.core.request import client_ip
 from app.db.session import get_db
+from app.jobs.service import validate_idempotency_key
 from app.models.client import Client
 from app.models.strategy import Strategy
 from app.strategy.generator import generate_strategy
@@ -26,6 +28,7 @@ router = APIRouter(tags=["strategies"])
 DB = Annotated[AsyncSession, Depends(get_db)]
 WRITER = require_role("admin", "manager")
 LIST_LIMIT = 50
+IDEMPOTENCY_SCOPE = "strategy.generate"
 
 
 class GenerateIn(BaseModel):
@@ -60,6 +63,15 @@ async def _client_or_404(db: AsyncSession, current: CurrentUser, client_id: UUID
     return client
 
 
+async def _strategy_or_404(db: AsyncSession, current: CurrentUser, strategy_id: UUID) -> Strategy:
+    strategy = await db.scalar(
+        select(Strategy).where(Strategy.id == strategy_id, Strategy.tenant_id == current.tenant_id)
+    )
+    if not strategy:
+        raise ProblemException(404, "Not Found", "Strategy not found.")
+    return strategy
+
+
 @router.post(
     "/clients/{client_id}/strategies",
     response_model=StrategyOut,
@@ -73,7 +85,29 @@ async def create_strategy(
     current: Annotated[CurrentUser, WRITER],
     db: DB,
 ) -> StrategyOut:
+    """Generate a new version. With an `Idempotency-Key` header, a retried request returns the
+    strategy the first one made instead of calling (and billing) the model again."""
+    key = validate_idempotency_key(request.headers.get("Idempotency-Key"))
     client = await _client_or_404(db, current, client_id)
+    if key is None:
+        return await _generate(db, request, current, client, body.month)
+
+    fingerprint = f"{client_id}|{body.month}"
+    done = await idempotency.claim(IDEMPOTENCY_SCOPE, current.tenant_id, key, fingerprint)
+    if done is not None:
+        return StrategyOut.model_validate(await _strategy_or_404(db, current, done))
+    try:
+        out = await _generate(db, request, current, client, body.month)
+    except BaseException:  # includes cancellation: never leave the key reserved
+        await idempotency.release(IDEMPOTENCY_SCOPE, current.tenant_id, key)
+        raise
+    await idempotency.complete(IDEMPOTENCY_SCOPE, current.tenant_id, key, fingerprint, out.id)
+    return out
+
+
+async def _generate(
+    db: AsyncSession, request: Request, current: CurrentUser, client: Client, month: str
+) -> StrategyOut:
     if client.status == "archived":
         raise ProblemException(409, "Conflict", "Restore this client before generating.")
     try:
@@ -82,7 +116,7 @@ async def create_strategy(
             tenant_id=current.tenant_id,
             user_id=current.user.id,
             client=client,
-            month=body.month,
+            month=month,
         )
     except BudgetExceededError as exc:
         raise ProblemException(402, "Payment Required", str(exc)) from exc
@@ -101,7 +135,7 @@ async def create_strategy(
         action="strategy.generate",
         entity="strategy",
         entity_id=strategy.id,
-        meta={"client_id": str(client_id), "month": body.month, "version": strategy.version},
+        meta={"client_id": str(client.id), "month": month, "version": strategy.version},
         ip=client_ip(request),
     )
     await db.refresh(strategy)  # server defaults (created_at); RLS context is gone after commit
@@ -128,9 +162,4 @@ async def list_strategies(
 async def get_strategy(
     strategy_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: DB
 ) -> Strategy:
-    strategy = await db.scalar(
-        select(Strategy).where(Strategy.id == strategy_id, Strategy.tenant_id == current.tenant_id)
-    )
-    if not strategy:
-        raise ProblemException(404, "Not Found", "Strategy not found.")
-    return strategy
+    return await _strategy_or_404(db, current, strategy_id)

@@ -8,7 +8,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +17,7 @@ from sqlalchemy import text
 import app.ai.gateway as gateway
 import app.ai.providers as providers
 import app.api.v1.knowledge as knowledge_api
+import app.core.idempotency as idempotency
 import app.db.engine as db_engine
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password
@@ -407,3 +408,135 @@ def test_clean_strategy_has_no_warnings(
     r = _generate(admin_token, ready_client, month="2027-02")
     assert r.status_code == 201, r.text
     assert r.json()["warnings"] == []
+
+
+# ---------- Idempotency-Key: a retry must never call (and bill) the model again ----------
+
+
+def _keyed(token: str, cid: str, key: str, month: str) -> Any:
+    return client.post(
+        f"/api/v1/clients/{cid}/strategies",
+        json={"month": month},
+        headers=_auth(token) | {"Idempotency-Key": key},
+    )
+
+
+def _new_key() -> str:
+    return f"test-{uuid4()}"  # results are remembered for a day, so keys are unique per run
+
+
+def _versions(token: str, cid: str, month: str) -> list[int]:
+    rows = client.get(f"/api/v1/clients/{cid}/strategies", headers=_auth(token)).json()
+    return sorted(s["version"] for s in rows if s["month"] == month)
+
+
+def test_retry_with_the_same_key_replays_without_calling_the_model(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    key = _new_key()
+    first = _keyed(admin_token, ready_client, key, "2027-03")
+    again = _keyed(admin_token, ready_client, key, "2027-03")
+    assert first.status_code == again.status_code == 201, again.text
+    assert again.json()["id"] == first.json()["id"]
+    assert len(mock_model) == 1
+    assert _versions(admin_token, ready_client, "2027-03") == [1]
+
+
+def test_a_new_key_or_no_key_still_makes_a_new_version(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    assert _keyed(admin_token, ready_client, _new_key(), "2027-04").status_code == 201
+    assert _keyed(admin_token, ready_client, _new_key(), "2027-04").status_code == 201
+    assert _generate(admin_token, ready_client, month="2027-04").status_code == 201
+    assert _versions(admin_token, ready_client, "2027-04") == [1, 2, 3]
+
+
+def test_a_key_reused_for_another_month_is_refused(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    key = _new_key()
+    assert _keyed(admin_token, ready_client, key, "2027-05").status_code == 201
+    r = _keyed(admin_token, ready_client, key, "2027-06")
+    assert r.status_code == 422 and "Idempotency-Key" in r.json()["detail"]
+    assert len(mock_model) == 1
+
+
+def test_a_retry_while_the_first_request_is_running_is_refused(
+    admin_token: str, ready_client: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The likeliest double charge: the caller gives up waiting and retries."""
+    key = _new_key()
+    during: list[Any] = []
+    calls = 0
+
+    async def slow_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # while the first call is in flight, the same request arrives again
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                during.append(
+                    pool.submit(_keyed, admin_token, ready_client, key, "2027-07").result()
+                )
+        return _reply(json.dumps(PLAN))
+
+    monkeypatch.setattr(providers, "_post_json", slow_post)
+    first = _keyed(admin_token, ready_client, key, "2027-07")
+    assert first.status_code == 201, first.text
+    assert during[0].status_code == 409, during[0].text
+    assert "still being generated" in during[0].json()["detail"]
+    assert calls == 1
+
+
+def test_a_failed_generation_frees_the_key_for_a_retry(
+    admin_token: str, ready_client: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = _new_key()
+
+    async def rejected(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        raise providers.ProviderError("The provider rejected the credentials.")
+
+    monkeypatch.setattr(providers, "_post_json", rejected)
+    assert _keyed(admin_token, ready_client, key, "2027-08").status_code == 502
+
+    async def works(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        return _reply(json.dumps(PLAN))
+
+    monkeypatch.setattr(providers, "_post_json", works)
+    assert _keyed(admin_token, ready_client, key, "2027-08").status_code == 201
+
+
+def test_keys_are_private_to_their_tenant(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    key = _new_key()
+    mine = _keyed(admin_token, ready_client, key, "2027-09")
+    assert mine.status_code == 201
+    other = str(_register(_OTHER)["access_token"])
+    _set_route(other)
+    theirs = _keyed(other, _new_client(other), key, "2027-09")
+    assert theirs.status_code == 201, theirs.text
+    assert theirs.json()["id"] != mine.json()["id"]
+
+
+def test_a_malformed_key_is_rejected_before_the_model_is_called(
+    admin_token: str, ready_client: str, mock_model: list[dict[str, Any]]
+) -> None:
+    assert _keyed(admin_token, ready_client, "short", "2027-10").status_code == 422
+    assert mock_model == []
+
+
+def test_when_the_key_cannot_be_reserved_nothing_is_billed(
+    admin_token: str,
+    ready_client: str,
+    mock_model: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asked for duplicate protection that cannot be given, refuse rather than risk it."""
+
+    def down() -> Any:
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(idempotency, "get_redis", down)
+    r = _keyed(admin_token, ready_client, _new_key(), "2027-11")
+    assert r.status_code == 503, r.text
+    assert mock_model == []
