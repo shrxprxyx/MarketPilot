@@ -221,6 +221,20 @@ async def create_invite(
             "update it instead of inviting again.",
         )
 
+    # One live invite per email: inviting again replaces the old link, so a lost link can be
+    # reissued and an old one cannot be used to join with a role that was since changed.
+    stale = await db.scalars(
+        select(Invite).where(
+            Invite.tenant_id == current.tenant_id,
+            Invite.status == "pending",
+            func.lower(Invite.email) == body.email,
+        )
+    )
+    replaced = 0
+    for old in stale:
+        await db.delete(old)
+        replaced += 1
+
     raw = make_invite_token()
     invite = Invite(
         tenant_id=current.tenant_id,
@@ -240,7 +254,7 @@ async def create_invite(
         action="invite.created",
         entity="invite",
         entity_id=invite.id,
-        meta={"email": invite.email, "role": invite.role},
+        meta={"email": invite.email, "role": invite.role, "replaced": replaced},
         ip=client_ip(request),
     )
     await db.commit()

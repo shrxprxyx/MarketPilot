@@ -206,3 +206,29 @@ def test_accept_invite_with_bad_token_returns_401() -> None:
         json={"token": "not-a-real-token", "password": "somepassword1"},
     )
     assert r.status_code == 401
+
+
+def test_inviting_the_same_email_again_replaces_the_old_invite(admin_token: str) -> None:
+    first = client.post(
+        "/api/v1/members/invite",
+        json={"email": "reissue@example.com", "role": "member"},
+        headers=_auth(admin_token),
+    ).json()
+    second = client.post(
+        "/api/v1/members/invite",
+        json={"email": "Reissue@Example.com", "role": "manager"},
+        headers=_auth(admin_token),
+    ).json()
+
+    pending = client.get("/api/v1/members/invites", headers=_auth(admin_token)).json()
+    mine = [i for i in pending if i["email"] == "reissue@example.com"]
+    assert [i["id"] for i in mine] == [second["id"]]
+    assert mine[0]["role"] == "manager"
+
+    old = client.post(
+        "/api/v1/auth/accept-invite",
+        json={"token": first["invite_token"], "password": "somepassword1"},
+    )
+    assert old.status_code == 401
+
+    client.delete(f"/api/v1/members/invites/{second['id']}", headers=_auth(admin_token))
