@@ -86,17 +86,21 @@ async def _get_membership_or_404(
 async def _is_last_active_admin(db: AsyncSession, tenant_id: UUID, membership: Membership) -> bool:
     if membership.role != "admin" or membership.status != "active":
         return False
-    other_active_admins = await db.scalar(
-        select(func.count())
-        .select_from(Membership)
+    # Lock every active admin row (in a fixed order, so two requests cannot deadlock) before
+    # counting. Without the lock, two admins demoting each other at once would each see the
+    # other as still active and both succeed. The second request waits here, then re-reads
+    # the rows the first one changed.
+    active_admin_ids = await db.scalars(
+        select(Membership.id)
         .where(
             Membership.tenant_id == tenant_id,
             Membership.role == "admin",
             Membership.status == "active",
-            Membership.id != membership.id,
         )
+        .order_by(Membership.id)
+        .with_for_update()
     )
-    return other_active_admins == 0
+    return all(admin_id == membership.id for admin_id in active_admin_ids)
 
 
 @router.get("", response_model=list[MemberOut])
