@@ -50,9 +50,10 @@ class NoRouteError(GatewayError):
     """The tenant has no usable route for the task (not set up, or its connection is gone)."""
 
 
-class InvalidOutputError(ProviderError):
-    """Every repair attempt returned output that does not match the schema. The tokens those
-    attempts consumed are carried along so they can still be recorded as usage."""
+class WastedUsageError(ProviderError):
+    """A call failed after earlier attempts had already consumed tokens (output that did not
+    match the schema, then a provider failure or more invalid output). The tokens are carried
+    along so they can still be recorded as usage."""
 
     def __init__(self, message: str, tokens_in: int, tokens_out: int, latency_ms: int) -> None:
         super().__init__(message)
@@ -137,6 +138,16 @@ def _repair_prompt(exc: ValidationError) -> str:
     )
 
 
+def _raise_keeping_spent_tokens(
+    exc: ProviderError, tokens_in: int, tokens_out: int, started: float
+) -> None:
+    """If earlier attempts of this call already consumed tokens, fail in a way that carries
+    them, so the spend is still recorded."""
+    if tokens_in or tokens_out:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        raise WastedUsageError(str(exc), tokens_in, tokens_out, latency_ms) from exc
+
+
 async def _call(
     target: _Target,
     route: TaskModelRoute,
@@ -152,7 +163,7 @@ async def _call(
     repair_retries = MAX_REPAIR_RETRIES
     conversation = messages
     tokens_in = tokens_out = 0
-    attempt = 0
+    attempt = 0  # transient failures of the current request; a repair re-ask starts afresh
     started = time.monotonic()
     while True:
         attempt += 1
@@ -166,11 +177,16 @@ async def _call(
                 max_tokens=route.max_tokens,
                 json_schema=json_schema,
             )
-        except TransientProviderError:
+        except TransientProviderError as exc:
             if attempt >= MAX_ATTEMPTS:
+                _raise_keeping_spent_tokens(exc, tokens_in, tokens_out, started)
                 raise
             await asyncio.sleep(BACKOFF_SECONDS * attempt)
             continue
+        except ProviderError as exc:
+            _raise_keeping_spent_tokens(exc, tokens_in, tokens_out, started)
+            raise
+        attempt = 0
         tokens_in += completion.tokens_in
         tokens_out += completion.tokens_out
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -181,7 +197,7 @@ async def _call(
             return total, schema.model_validate_json(completion.text), latency_ms
         except ValidationError as exc:
             if repair_retries == 0:
-                raise InvalidOutputError(
+                raise WastedUsageError(
                     "The model returned output that does not match the schema.",
                     tokens_in,
                     tokens_out,
@@ -292,7 +308,7 @@ async def _run_targets(
         provider = target.connection.provider
         try:
             completion, parsed, latency_ms = await _call(target, route, messages, schema)
-        except InvalidOutputError as exc:
+        except WastedUsageError as exc:
             last_error = exc
             await _record_usage(
                 db, tenant_id, user_id, task, client_id, target,

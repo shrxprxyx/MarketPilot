@@ -383,6 +383,57 @@ def test_gateway_records_tokens_spent_on_persistently_invalid_output(
     assert _usage_totals(tenant_id) == (rows + 1, tin + 300, tout + 30)
 
 
+def test_gateway_retries_a_transient_error_that_follows_a_repair(
+    admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn_id = _conn(admin_token)
+    _route(admin_token, conn_id, task="strategy")
+    steps: list[Any] = [
+        "not json",
+        "still not json",
+        providers.TransientProviderError("HTTP 503"),
+        '{"title": "Q1", "steps": ["a"]}',
+    ]
+    calls: list[int] = []
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        calls.append(1)
+        step = steps[len(calls) - 1]
+        if isinstance(step, Exception):
+            raise step
+        return _openai_reply(step, tin=100, tout=10)
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    monkeypatch.setattr(gateway, "BACKOFF_SECONDS", 0)
+    result = _run_gateway(
+        tenant_id, task="strategy", messages=[{"role": "user", "content": "x"}], schema=Plan
+    )
+    assert isinstance(result.parsed, Plan) and len(calls) == 4
+    assert (result.tokens_in, result.tokens_out) == (300, 30)
+
+
+def test_gateway_records_tokens_spent_before_a_provider_failure(
+    admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn_id = _conn(admin_token)
+    _route(admin_token, conn_id, task="strategy")
+    calls: list[int] = []
+
+    async def fake_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            return _openai_reply("not json", tin=100, tout=10)
+        raise providers.ProviderError("The provider rejected the credentials.")
+
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    rows, tin, tout = _usage_totals(tenant_id)
+    with pytest.raises(gateway.GatewayError, match="rejected the credentials"):
+        _run_gateway(
+            tenant_id, task="strategy", messages=[{"role": "user", "content": "x"}], schema=Plan
+        )
+    assert _usage_totals(tenant_id) == (rows + 1, tin + 100, tout + 10)
+
+
 def test_gateway_gives_up_after_the_overall_deadline(
     admin_token: str, tenant_id: UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
