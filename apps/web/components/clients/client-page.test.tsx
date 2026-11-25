@@ -23,7 +23,12 @@ vi.mock("@/components/clients/client-overview", () => ({
   ClientOverview: ({ client: c }: { client: { name: string } }) => <div>overview-panel {c.name}</div>,
 }));
 vi.mock("@/components/clients/brand-profile-form", () => ({
-  BrandProfileForm: ({ clientId }: { clientId: string }) => <div>brand-panel {clientId}</div>,
+  BrandProfileForm: ({ clientId }: { clientId: string }) => (
+    <div>
+      brand-panel {clientId}
+      <input aria-label="draft" />
+    </div>
+  ),
 }));
 vi.mock("@/components/knowledge/knowledge-section", () => ({
   KnowledgeSection: ({ clientId }: { clientId: string }) => <div>knowledge-panel {clientId}</div>,
@@ -60,7 +65,16 @@ describe("ClientPage", () => {
     ]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("overview-panel Acme Pets")).toBeInTheDocument();
-    expect(screen.queryByText("brand-panel c1")).not.toBeInTheDocument();
+    expect(screen.queryByText("brand-panel c1")).not.toBeVisible();
+  });
+
+  it("keeps unsaved brand profile edits when switching tabs and back", async () => {
+    render(<ClientPage id="c1" />);
+    await userEvent.click(screen.getByRole("tab", { name: "Brand profile" }));
+    await userEvent.type(screen.getByLabelText("draft"), "bold and warm");
+    await userEvent.click(screen.getByRole("tab", { name: "Knowledge" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Brand profile" }));
+    expect(screen.getByLabelText("draft")).toHaveValue("bold and warm");
   });
 
   it("shows only the selected tab's panel, passing it the client id", async () => {
@@ -70,7 +84,7 @@ describe("ClientPage", () => {
     expect(screen.queryByText(/overview-panel/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Knowledge" }));
     expect(screen.getByText("knowledge-panel c1")).toBeInTheDocument();
-    expect(screen.queryByText("brand-panel c1")).not.toBeInTheDocument();
+    expect(screen.queryByText("brand-panel c1")).not.toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "Strategy" }));
     expect(screen.getByText("strategy-panel c1")).toBeInTheDocument();
     expect(screen.queryByText("knowledge-panel c1")).not.toBeInTheDocument();

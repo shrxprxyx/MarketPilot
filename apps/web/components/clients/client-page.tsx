@@ -70,7 +70,8 @@ export function ClientPage({ id }: { id: string }) {
         <TabsContent value="overview" className="pt-6">
           <ClientOverview client={client} />
         </TabsContent>
-        <TabsContent value="brand" className="pt-6">
+        {/* keepMounted: switching tabs must not discard unsaved edits in the form. */}
+        <TabsContent value="brand" keepMounted className="pt-6">
           <BrandProfileForm clientId={client.id} />
         </TabsContent>
         <TabsContent value="knowledge" className="pt-6">
