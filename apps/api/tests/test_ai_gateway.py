@@ -560,3 +560,30 @@ def test_usage_is_tenant_scoped(admin_token: str) -> None:
     other = str(_register(_OTHER)["access_token"])
     rows = client.get("/api/v1/ai/usage", params={"group_by": "task"}, headers=_auth(other)).json()
     assert rows == []
+
+
+def test_routes_default_temperature_depends_on_the_task(admin_token: str) -> None:
+    conn_id = _conn(admin_token)
+    body = [
+        {"task_type": "analysis", "connection_id": conn_id, "model": "gpt-4o-mini"},
+        {"task_type": "content", "connection_id": conn_id, "model": "gpt-4o-mini"},
+    ]
+    r = client.put("/api/v1/ai/routes", json=body, headers=_auth(admin_token))
+    assert r.status_code == 200, r.text
+    by_task = {x["task_type"]: x["temperature"] for x in r.json()}
+    assert by_task == {"analysis": 0.3, "content": 0.7}
+
+
+def test_deleting_a_routed_connection_is_refused_and_keeps_the_route(admin_token: str) -> None:
+    primary = _conn(admin_token, label="primary")
+    fallback = _conn(admin_token, label="fallback")
+    r = _route(
+        admin_token, primary, fallback_connection_id=fallback, fallback_model="gpt-4o-mini"
+    )
+    assert r.status_code == 200, r.text
+    for conn_id in (primary, fallback):
+        d = client.delete(f"/api/v1/ai/connections/{conn_id}", headers=_auth(admin_token))
+        assert d.status_code == 409
+        assert "strategy" in d.json()["detail"]
+    routes = client.get("/api/v1/ai/routes", headers=_auth(admin_token)).json()
+    assert any(x["task_type"] == "strategy" and x["connection_id"] == primary for x in routes)

@@ -27,13 +27,16 @@ class RouteIn(BaseModel):
     task_type: TaskType
     connection_id: UUID
     model: str = Field(min_length=1, max_length=200)
-    temperature: float = Field(default=0.7, ge=0, le=2)
+    # Unset means the task's default: 0.3 for analysis (repeatable), 0.7 otherwise (SRS §10.4).
+    temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int = Field(default=2048, ge=1, le=200_000)
     fallback_connection_id: UUID | None = None
     fallback_model: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def _fallback_pair(self) -> "RouteIn":
+        if self.temperature is None:
+            self.temperature = 0.3 if self.task_type == "analysis" else 0.7
         if (self.fallback_connection_id is None) != (self.fallback_model is None):
             raise ValueError("fallback_connection_id and fallback_model go together")
         return self

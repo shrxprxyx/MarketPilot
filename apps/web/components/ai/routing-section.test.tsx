@@ -60,6 +60,7 @@ describe("RoutingSection", () => {
     expect(screen.getByLabelText("content temperature")).toHaveValue(0.7);
     expect(screen.getByLabelText("content max tokens")).toHaveValue(2048);
     expect(screen.getByLabelText("analysis connection")).toBeInTheDocument();
+    expect(screen.getByLabelText("analysis temperature")).toHaveValue(0.3);
   });
 
   it("suggests tested models for the selected connection but accepts free text", async () => {

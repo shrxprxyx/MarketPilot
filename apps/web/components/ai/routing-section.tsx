@@ -42,7 +42,8 @@ function buildRows(routes: AiRoute[]): Row[] {
       task_type: task,
       connection_id: r?.connection_id ?? "",
       model: r?.model ?? "",
-      temperature: r?.temperature ?? 0.7,
+      // SRS section 10.4: analysis is repeatable (0.3), writing tasks are more varied (0.7).
+      temperature: r?.temperature ?? (task === "analysis" ? 0.3 : 0.7),
       max_tokens: r?.max_tokens ?? 2048,
       fallback_connection_id: r?.fallback_connection_id ?? "",
       fallback_model: r?.fallback_model ?? "",

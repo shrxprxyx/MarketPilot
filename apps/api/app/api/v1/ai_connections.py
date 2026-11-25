@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.providers import ADAPTERS, ProviderError
@@ -14,6 +14,7 @@ from app.core.errors import ProblemException
 from app.core.request import client_ip
 from app.db.session import get_db
 from app.models.ai_connection import AIConnection
+from app.models.task_model_route import TaskModelRoute
 
 router = APIRouter(prefix="/ai/connections", tags=["ai"])
 
@@ -124,6 +125,26 @@ async def delete_connection(
     conn_id: UUID, request: Request, current: Annotated[CurrentUser, WRITER], db: DB
 ) -> None:
     conn = await _get_or_404(db, current, conn_id)
+    # Routes reference connections with ON DELETE CASCADE, so deleting one in use would
+    # silently remove its routing and break the next generation. Make that a deliberate step.
+    used_by = sorted(
+        await db.scalars(
+            select(TaskModelRoute.task_type).where(
+                TaskModelRoute.tenant_id == current.tenant_id,
+                or_(
+                    TaskModelRoute.connection_id == conn.id,
+                    TaskModelRoute.fallback_connection_id == conn.id,
+                ),
+            )
+        )
+    )
+    if used_by:
+        raise ProblemException(
+            409,
+            "Conflict",
+            f"This connection is used for routing ({', '.join(used_by)}). "
+            "Change the routing first, then delete it.",
+        )
     log_audit(
         db,
         tenant_id=current.tenant_id,
