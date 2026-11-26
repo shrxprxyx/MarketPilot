@@ -4,19 +4,16 @@ provider's native structured-output mechanism (FR-BYOM-07), token streaming and 
 `stream()` yields text deltas as `str` and ends with one `Completion` carrying the full text
 and the token usage, so a caller can show progress and still record cost. `embed()` is for
 providers that offer an embeddings API; the app's own RAG index uses local fastembed."""
-import asyncio
-import ipaddress
 import json
 import re
-import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
-from urllib.parse import urlsplit
 
 import httpx
 
 from app.config import settings
+from app.core.ssrf import UnsafeDestination, check_destination
 
 TIMEOUT = 10.0
 COMPLETE_TIMEOUT = 120.0
@@ -78,38 +75,24 @@ class ProviderAdapter(Protocol):
     ) -> Embeddings: ...
 
 
+_UNSAFE_MESSAGES = {
+    "scheme": "The base URL must start with http:// or https://.",
+    "resolve": "Could not resolve the provider's host name.",
+    "blocked": "That address is not allowed as a provider base URL.",
+    "private": (
+        "Private and loopback addresses are not allowed as a provider base URL. "
+        "Use a publicly reachable URL (for Ollama, a tunnel)."
+    ),
+}
+
+
 async def _check_destination(url: str) -> None:
-    """SSRF guard for tenant-supplied base URLs: only http(s), and the host must not resolve
-    to a link-local or otherwise non-routable address (this covers cloud metadata endpoints).
-    Loopback and private-network addresses are refused unless ALLOW_PRIVATE_BASE_URLS is on.
-    Redirects are never followed (httpx default). The name is resolved again when the request
-    connects, so this is a guard against misconfiguration and casual abuse, not a defence
-    against DNS rebinding."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ProviderError("The base URL must start with http:// or https://.")
+    """SSRF guard for tenant-supplied base URLs (see app.core.ssrf). Redirects are never
+    followed (httpx default)."""
     try:
-        infos = await asyncio.get_running_loop().getaddrinfo(
-            parts.hostname, parts.port or (443 if parts.scheme == "https" else 80),
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as exc:
-        raise ProviderError("Could not resolve the provider's host name.") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-            ip = ip.ipv4_mapped
-        if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
-            raise ProviderError("That address is not allowed as a provider base URL.")
-        # Order matters: ::1 is both loopback and "reserved", 240.0.0.0/4 both private and
-        # reserved. Loopback is a deployment choice; reserved ranges are never valid.
-        if not ip.is_loopback and ip.is_reserved:
-            raise ProviderError("That address is not allowed as a provider base URL.")
-        if (ip.is_loopback or ip.is_private) and not settings.allow_private_base_urls:
-            raise ProviderError(
-                "Private and loopback addresses are not allowed as a provider base URL. "
-                "Use a publicly reachable URL (for Ollama, a tunnel)."
-            )
+        await check_destination(url, allow_private=settings.allow_private_base_urls)
+    except UnsafeDestination as exc:
+        raise ProviderError(_UNSAFE_MESSAGES[exc.kind]) from exc
 
 
 async def _request(
