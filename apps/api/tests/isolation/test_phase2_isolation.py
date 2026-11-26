@@ -1,6 +1,7 @@
 """
 DB-level tenant isolation for the Phase 2 tables (FR-TEN-05, SRS §11): ai_connections,
-task_model_routes, documents, document_chunks, usage_logs, strategies and jobs. These use the plain
+task_model_routes, documents, document_chunks, usage_logs, strategies, jobs, audits and
+audit_findings. These use the plain
 tenant_id-only policy; the API-level 404 tests elsewhere do not prove the database enforces it,
 so these run as the non-owner app_user with FORCE RLS, like production.
 """
@@ -19,6 +20,7 @@ import app.db.engine as db_engine
 from app.db.base import Base
 from app.db.rls import set_rls_context
 from app.models.ai_connection import AIConnection
+from app.models.audit import Audit, AuditFinding
 from app.models.client import Client
 from app.models.document import EMBEDDING_DIM, Document, DocumentChunk
 from app.models.job import Job
@@ -36,6 +38,7 @@ class Parents:
     client_id: UUID
     connection_id: UUID
     document_id: UUID
+    audit_id: UUID
 
 
 def _row(tenant_id: UUID, p: Parents, *, rogue: bool = False) -> dict[str, Callable[[], Base]]:
@@ -90,10 +93,17 @@ def _row(tenant_id: UUID, p: Parents, *, rogue: bool = False) -> dict[str, Calla
             tokens_out=1,
         ),
         "jobs": lambda: Job(tenant_id=tenant_id, type="document.index", payload={}),
+        "audits": lambda: Audit(
+            tenant_id=tenant_id, client_id=p.client_id, type="website", url="https://a.test"
+        ),
+        "audit_findings": lambda: AuditFinding(
+            tenant_id=tenant_id, audit_id=p.audit_id, code="c", category="links",
+            severity="low", title="t", detail="d", recommendation="r", metric={},
+        ),
     }
 
 
-TABLES = list(_row(uuid.uuid4(), Parents(*(uuid.uuid4(),) * 4)))
+TABLES = list(_row(uuid.uuid4(), Parents(*(uuid.uuid4(),) * 5)))
 
 
 async def _cleanup() -> None:
@@ -125,7 +135,10 @@ async def _seed(name: str, slug: str) -> tuple[Parents, dict[str, UUID]]:
         )
         session.add(doc)
         await session.flush()
-        parents = Parents(tenant.id, client.id, conn.id, doc.id)
+        audit = Audit(tenant_id=tenant.id, client_id=client.id, type="website", url="https://p.test")
+        session.add(audit)
+        await session.flush()
+        parents = Parents(tenant.id, client.id, conn.id, doc.id, audit.id)
         ids: dict[str, UUID] = {}
         for table, make in _row(tenant.id, parents).items():
             obj: Any = make()

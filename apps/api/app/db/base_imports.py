@@ -4,6 +4,7 @@
 
 from app.db.base import Base  # noqa: F401
 from app.models.ai_connection import AIConnection  # noqa: F401
+from app.models.audit import Audit, AuditFinding  # noqa: F401
 from app.models.audit_log import AuditLog  # noqa: F401
 from app.models.brand_profile import BrandProfile  # noqa: F401
 from app.models.client import Client  # noqa: F401
