@@ -11,6 +11,7 @@ from app.api.v1 import (
     ai_routes,
     ai_usage,
     audit,
+    audits,
     auth,
     clients,
     health,
@@ -59,6 +60,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(clients.router, prefix="/api/v1")
 app.include_router(members.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
+app.include_router(audits.router, prefix="/api/v1")
 app.include_router(ai_budget.router, prefix="/api/v1")
 app.include_router(ai_connections.router, prefix="/api/v1")
 app.include_router(ai_routes.router, prefix="/api/v1")

@@ -7,7 +7,7 @@ celery_app = Celery(
     "marketpilot",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.jobs.rag_tasks"],
+    include=["app.jobs.rag_tasks", "app.jobs.audit_tasks"],
 )
 celery_app.conf.update(
     task_serializer="json",
