@@ -228,8 +228,9 @@ def test_parser_extracts_the_on_page_signals() -> None:
 
 def test_parser_survives_broken_markup_and_bad_json_ld() -> None:
     d = parse_page(
-        '<title>T<h1>Unclosed<script type="application/ld+json">{oops</script><img>'
+        '<title>T</title><h1>Unclosed<script type="application/ld+json">{oops</script><img>'
     )
+    assert d.title == "T"
     assert d.images == 1
     assert not d.has_structured_data
 
