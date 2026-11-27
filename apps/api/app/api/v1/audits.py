@@ -80,6 +80,24 @@ class FindingListOut(BaseModel):
     items: list[FindingOut]
 
 
+class PreviousAuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    score: int | None
+    created_at: datetime
+
+
+class ComparisonOut(BaseModel):
+    """Issues compared with the audit before this one (FR-AUD-08). `previous` is null for a
+    client's first audit, in which case every list is empty."""
+
+    previous: PreviousAuditOut | None
+    new: list[FindingOut]  # in this audit only
+    fixed: list[FindingOut]  # in the previous audit only
+    unchanged: list[FindingOut]  # in both
+
+
 async def _client_or_404(db: AsyncSession, current: CurrentUser, client_id: UUID) -> Client:
     # The explicit tenant filter is defence in depth on top of RLS (§3.4).
     client = await db.scalar(
@@ -271,3 +289,49 @@ async def list_findings(
         stmt = stmt.where(AuditFinding.category == category)
     rows = (await db.execute(stmt)).scalars().all()
     return FindingListOut(items=[FindingOut.model_validate(r) for r in rows])
+
+
+async def _all_findings(db: AsyncSession, tenant_id: UUID, audit_id: UUID) -> list[AuditFinding]:
+    rank = case(SEVERITY_ORDER, value=AuditFinding.severity, else_=9)
+    stmt = (
+        select(AuditFinding)
+        .where(AuditFinding.audit_id == audit_id, AuditFinding.tenant_id == tenant_id)
+        .order_by(rank, AuditFinding.code, AuditFinding.url, AuditFinding.id)
+    )
+    return list((await db.execute(stmt)).scalars().all())
+
+
+@router.get("/audits/{audit_id}/comparison", response_model=ComparisonOut)
+async def compare_with_previous(
+    audit_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: DB
+) -> ComparisonOut:
+    """The same issue is the same rule (`code`) on the same page (`url`). The previous audit is
+    the client's newest finished audit of the same type before this one."""
+    audit = await _audit_or_404(db, current, audit_id)
+    if audit.status != "succeeded":
+        raise ProblemException(409, "Conflict", "Only a finished audit can be compared.")
+    previous = await db.scalar(
+        select(Audit)
+        .where(
+            Audit.tenant_id == current.tenant_id,
+            Audit.client_id == audit.client_id,
+            Audit.type == audit.type,
+            Audit.status == "succeeded",
+            tuple_(Audit.created_at, Audit.id) < (audit.created_at, audit.id),
+        )
+        .order_by(Audit.created_at.desc(), Audit.id.desc())
+        .limit(1)
+    )
+    if previous is None:
+        return ComparisonOut(previous=None, new=[], fixed=[], unchanged=[])
+
+    now = await _all_findings(db, current.tenant_id, audit.id)
+    before = await _all_findings(db, current.tenant_id, previous.id)
+    now_keys = {(f.code, f.url) for f in now}
+    before_keys = {(f.code, f.url) for f in before}
+    return ComparisonOut(
+        previous=PreviousAuditOut.model_validate(previous),
+        new=[FindingOut.model_validate(f) for f in now if (f.code, f.url) not in before_keys],
+        fixed=[FindingOut.model_validate(f) for f in before if (f.code, f.url) not in now_keys],
+        unchanged=[FindingOut.model_validate(f) for f in now if (f.code, f.url) in before_keys],
+    )

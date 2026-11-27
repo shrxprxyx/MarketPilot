@@ -363,6 +363,65 @@ def test_history_lists_newest_first_with_a_cursor(admin_token: str, cid: str) ->
     assert bad.status_code == 400
 
 
+def _compare(token: str, audit_id: str) -> Any:
+    return client.get(f"/api/v1/audits/{audit_id}/comparison", headers=_auth(token))
+
+
+def test_comparison_splits_issues_into_new_fixed_and_unchanged(admin_token: str, cid: str) -> None:
+    first = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    assert _compare(admin_token, first).json() == {
+        "previous": None, "new": [], "fixed": [], "unchanged": [],
+    }
+
+    _routes["site"] = CLEAN_SITE  # the broken link is fixed, the missing sitemap etc. too
+    second = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    fixed = _compare(admin_token, second).json()
+    assert fixed["previous"]["id"] == first
+    assert fixed["new"] == [] and fixed["unchanged"] == []
+    assert "broken_internal_link" in {f["code"] for f in fixed["fixed"]}
+
+    _routes["site"] = BROKEN_SITE  # and the same problems come back
+    third = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    back = _compare(admin_token, third).json()
+    assert back["previous"]["id"] == second
+    assert {f["code"] for f in back["new"]} == {f["code"] for f in fixed["fixed"]}
+    assert back["fixed"] == [] and back["unchanged"] == []
+
+    fourth = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    same = _compare(admin_token, fourth).json()
+    assert same["previous"]["id"] == third
+    assert same["new"] == [] and same["fixed"] == []
+    assert {f["code"] for f in same["unchanged"]} == {f["code"] for f in back["new"]}
+
+
+def test_comparison_skips_audits_that_did_not_finish(admin_token: str, cid: str) -> None:
+    first = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    cancelled = _start(admin_token, cid).json()
+    client.delete(f"/api/v1/jobs/{cancelled['job_id']}", headers=_auth(admin_token))
+    _run_queued()  # the worker sees the cancelled job and stops the audit
+    third = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    assert _compare(admin_token, third).json()["previous"]["id"] == first
+
+
+def test_only_a_finished_audit_can_be_compared(admin_token: str, cid: str) -> None:
+    pending = _start(admin_token, cid).json()["id"]
+    assert _compare(admin_token, pending).status_code == 409
+
+
+def test_another_agency_cannot_compare_an_audit(
+    admin_token: str, other_token: str, cid: str
+) -> None:
+    audit_id = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    assert _compare(other_token, audit_id).status_code == 404
+
+
 def test_another_agency_cannot_see_or_start_audits(
     admin_token: str, other_token: str, cid: str
 ) -> None:
