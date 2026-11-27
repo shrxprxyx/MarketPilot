@@ -157,6 +157,15 @@ def test_start_queues_an_audit_and_a_job(admin_token: str, cid: str, tenant_id: 
     assert _job(admin_token, body["job_id"])["status"] == "queued"
 
 
+def test_the_list_gives_the_job_of_an_audit_that_is_still_active(
+    admin_token: str, cid: str
+) -> None:
+    started = _start(admin_token, cid).json()
+    listed = client.get(f"/api/v1/clients/{cid}/audits", headers=_auth(admin_token)).json()
+    assert listed["items"][0]["id"] == started["id"]
+    assert listed["items"][0]["job_id"] == started["job_id"]
+
+
 def test_start_needs_a_website_and_an_active_client(admin_token: str) -> None:
     no_site = _new_client(admin_token, name="No site")
     r = _start(admin_token, no_site)

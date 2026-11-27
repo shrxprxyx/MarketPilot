@@ -34,6 +34,9 @@ vi.mock("@/components/knowledge/knowledge-section", () => ({
   KnowledgeSection: ({ clientId }: { clientId: string }) => <div>knowledge-panel {clientId}</div>,
 }));
 
+vi.mock("@/components/audits/audits-section", () => ({
+  AuditsSection: ({ clientId }: { clientId: string }) => <div>audits-panel {clientId}</div>,
+}));
 vi.mock("@/components/strategy/strategy-section", () => ({
   StrategySection: ({ clientId }: { clientId: string }) => <div>strategy-panel {clientId}</div>,
 }));
@@ -55,13 +58,14 @@ describe("ClientPage", () => {
     expect(screen.getByText("Archived")).toBeInTheDocument();
   });
 
-  it("has Overview, Brand profile, Knowledge and Strategy tabs, with Overview selected first", () => {
+  it("has Overview, Brand profile, Knowledge, Strategy and Audits tabs, with Overview selected first", () => {
     render(<ClientPage id="c1" />);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "Overview",
       "Brand profile",
       "Knowledge",
       "Strategy",
+      "Audits",
     ]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("overview-panel Acme Pets")).toBeInTheDocument();
@@ -88,6 +92,8 @@ describe("ClientPage", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Strategy" }));
     expect(screen.getByText("strategy-panel c1")).toBeInTheDocument();
     expect(screen.queryByText("knowledge-panel c1")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Audits" }));
+    expect(screen.getByText("audits-panel c1")).toBeInTheDocument();
   });
 
   it("shows a skeleton while loading", () => {

@@ -24,6 +24,7 @@ from app.jobs.progress import update_job
 from app.jobs.service import create_job, replay_or_none, validate_idempotency_key
 from app.models.audit import ACTIVE_STATUSES, Audit, AuditFinding
 from app.models.client import Client
+from app.models.job import Job
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["audits"])
@@ -184,6 +185,26 @@ async def start_audit(
     return out
 
 
+async def _active_jobs(
+    db: AsyncSession, tenant_id: UUID, audit_ids: list[UUID]
+) -> dict[UUID, UUID]:
+    """audit id -> its newest queued or running job, so a reloaded page can follow progress."""
+    if not audit_ids:
+        return {}
+    audit_ref = Job.payload["audit_id"].astext
+    rows = await db.execute(
+        select(audit_ref, Job.id)
+        .where(
+            Job.tenant_id == tenant_id,
+            Job.type == AUDIT_JOB,
+            Job.status.in_(("queued", "running")),
+            audit_ref.in_([str(i) for i in audit_ids]),
+        )
+        .order_by(Job.created_at, Job.id)  # later rows win, so the newest job is kept
+    )
+    return {UUID(audit): job_id for audit, job_id in rows.all()}
+
+
 @router.get("/clients/{client_id}/audits", response_model=AuditListOut)
 async def list_audits(
     client_id: UUID,
@@ -210,8 +231,13 @@ async def list_audits(
     next_cursor = (
         encode_cursor(items[-1].created_at, items[-1].id) if len(rows) > limit and items else None
     )
+    active = [a.id for a in items if a.status in ACTIVE_STATUSES]
+    jobs = await _active_jobs(db, current.tenant_id, active)
     return AuditListOut(
-        items=[AuditOut.model_validate(a) for a in items], next_cursor=next_cursor
+        items=[
+            AuditOut.model_validate(a).model_copy(update={"job_id": jobs.get(a.id)}) for a in items
+        ],
+        next_cursor=next_cursor,
     )
 
 
