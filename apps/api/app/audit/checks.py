@@ -29,7 +29,7 @@ class Finding:
     metric: dict[str, Any] = field(default_factory=dict)
 
 
-def _ok_page(rec: PageRecord) -> bool:
+def ok_page(rec: PageRecord) -> bool:
     return (
         rec.data is not None
         and rec.fetch.status is not None
@@ -44,7 +44,7 @@ def run_checks(crawl: CrawlResult) -> list[Finding]:
     findings += _fetch_problems(crawl)
     findings += _redirects(crawl)
     findings += _link_checks(crawl)
-    html_pages = [r for r in crawl.pages.values() if _ok_page(r)]
+    html_pages = [r for r in crawl.pages.values() if ok_page(r)]
     for rec in html_pages:
         findings += _on_page(rec)
     findings += _duplicate_titles(html_pages)
@@ -107,7 +107,7 @@ def _fetch_problems(crawl: CrawlResult) -> list[Finding]:
                 "Fix the page, or update or remove the links that point to it.",
                 url=rec.url, metric={"status": f.status},
             ))
-        elif _ok_page(rec) and "noindex" in ((rec.data and rec.data.robots_meta) or ""):
+        elif ok_page(rec) and "noindex" in ((rec.data and rec.data.robots_meta) or ""):
             out.append(Finding(
                 "noindex", "technical", "medium", "Page is blocked from search with noindex",
                 "A robots meta tag tells search engines not to index this page.",

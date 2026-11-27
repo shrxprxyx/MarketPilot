@@ -74,6 +74,7 @@ def _run_queued() -> None:
 def _fake_world(monkeypatch: pytest.MonkeyPatch) -> None:
     _queued.clear()
     _routes["site"] = BROKEN_SITE
+    monkeypatch.setattr(runner.settings, "pagespeed_api_key", "")  # never call Google from tests
     monkeypatch.setattr(
         audits_api, "enqueue_website_audit", lambda t, a, j: _queued.append((t, a, j))
     )
@@ -255,6 +256,39 @@ def test_a_run_stores_a_score_and_sorted_findings(admin_token: str, cid: str) ->
     assert broken["url"] == "https://acme.test/missing"
     assert broken["recommendation"]
     assert sum(summary["severity_counts"].values()) == len(findings)
+
+
+def test_a_run_without_a_pagespeed_key_skips_that_step(admin_token: str, cid: str) -> None:
+    audit_id = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    audit = client.get(f"/api/v1/audits/{audit_id}", headers=_auth(admin_token)).json()
+    assert audit["status"] == "succeeded"
+    assert audit["summary"]["pagespeed"]["status"] == "skipped"
+    assert audit["summary"]["pagespeed"]["results"] == []
+
+
+def test_a_run_with_a_pagespeed_key_stores_the_results_and_reports_progress(
+    admin_token: str, cid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, tuple[int, int]]] = []
+
+    async def fake(crawl: Any, api_key: str, *, on_progress: Any, should_stop: Any) -> Any:
+        await on_progress(1, 4)
+        calls.append((api_key, (1, 4)))
+        return {"status": "done", "results": [
+            {"url": "https://acme.test/", "strategy": "mobile", "score": 80, "lcp_ms": 2000.0,
+             "cls": 0.1, "tbt_ms": 150.0, "error": None},
+        ]}
+
+    monkeypatch.setattr(runner.settings, "pagespeed_api_key", "the-key")
+    monkeypatch.setattr(runner, "collect_pagespeed", fake)
+    started = _start(admin_token, cid).json()
+    _run_queued()
+    audit = client.get(f"/api/v1/audits/{started['id']}", headers=_auth(admin_token)).json()
+    assert audit["status"] == "succeeded"
+    assert calls == [("the-key", (1, 4))]
+    assert audit["summary"]["pagespeed"]["results"][0]["score"] == 80
+    assert "the-key" not in str(audit)
 
 
 def test_findings_can_be_filtered(admin_token: str, cid: str) -> None:

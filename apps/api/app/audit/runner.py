@@ -11,17 +11,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.checks import Finding, run_checks
 from app.audit.crawler import CrawlResult, crawl
 from app.audit.fetcher import SafeFetcher
+from app.audit.pagespeed import collect_pagespeed
 from app.audit.scoring import score_audit
+from app.config import settings
 from app.db.rls import set_rls_context
 from app.jobs.progress import is_cancelled, job_status, update_job
 from app.models.audit import Audit, AuditFinding
 
 logger = logging.getLogger(__name__)
 CRAWL_SHARE = (5, 85)  # progress range used up by the crawl itself
+PAGESPEED_SHARE = (85, 90)  # and by the PageSpeed Insights calls
 
 
 def _summary(
-    crawl_result: CrawlResult, findings: list[Finding], categories: dict[str, int]
+    crawl_result: CrawlResult,
+    findings: list[Finding],
+    categories: dict[str, int],
+    pagespeed: dict[str, object],
 ) -> dict[str, object]:
     return {
         "categories": categories,
@@ -33,6 +39,7 @@ def _summary(
         "robots_present": crawl_result.robots.present,
         "sitemap_present": crawl_result.sitemap_present,
         "sitemap_urls": crawl_result.sitemap_urls,
+        "pagespeed": pagespeed,
     }
 
 
@@ -122,6 +129,24 @@ async def run_audit(
                 error="Cancelled.",
             )
             return
+
+        async def speed_progress(done: int, total: int) -> None:
+            low, high = PAGESPEED_SHARE
+            await update_job(
+                db, tenant_id, job_id, progress=low + int((high - low) * done / max(total, 1)),
+                message=f"Measuring page speed ({done + 1} of {total})",
+            )
+
+        pagespeed = await collect_pagespeed(
+            result, settings.pagespeed_api_key, on_progress=speed_progress,
+            should_stop=should_stop,
+        )
+        if await should_stop():
+            await _set_audit(
+                db, tenant_id, audit_id, status="cancelled", finished_at=_now(),
+                error="Cancelled.",
+            )
+            return
         await update_job(db, tenant_id, job_id, progress=90, message="Scoring")
         findings = run_checks(result)
         score, categories = score_audit(findings, len(result.pages))
@@ -136,7 +161,7 @@ async def run_audit(
         )
         if not await _set_audit(
             db, tenant_id, audit_id, status="succeeded", score=score, finished_at=_now(),
-            summary=_summary(result, findings, categories), raw=_raw(result),
+            summary=_summary(result, findings, categories, pagespeed), raw=_raw(result),
         ):
             return
         await update_job(

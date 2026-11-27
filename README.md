@@ -215,6 +215,7 @@ The API reads `.env` from the repository root (or `apps/api`); real environment 
 | `ALLOWED_ORIGINS` | no | CORS origins, default `http://localhost:3000` |
 | `ALLOW_PRIVATE_BASE_URLS` | no | `false` by default. Set `true` to let model connections point at loopback or private-network addresses (local Ollama). Link-local and metadata addresses are always refused. |
 | `TRUST_FORWARDED_FOR` | no | `false` by default. Set `true` when the API is only reached through the web app's proxy: the last `X-Forwarded-For` entry is then the caller's address for the login lockout and the audit log. Leave it off if the API is exposed directly. |
+| `PAGESPEED_API_KEY` | no | Google PageSpeed Insights key for the audit's page speed step (mobile and desktop scores and Core Web Vitals for the home page and the top five pages). Without it that step is skipped and the audit still completes. |
 | `RATE_LIMIT_SCALE` | no | Multiplies every per-user and per-tenant rate limit. Default `1`; leave it alone in production. The test suite raises it. |
 | `API_URL` (web) | no | Where Next.js proxies `/api/*`, default `http://localhost:8000/api/v1` |
 | `E2E_BASE_URL`, `E2E_DATABASE_URL` | tests | Playwright target and a `psql` URL for seeding (otherwise it uses `docker exec`) |

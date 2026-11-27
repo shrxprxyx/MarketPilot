@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # because then any caller could set the header.
     trust_forwarded_for: bool = False
 
+    # Google PageSpeed Insights key (free, from Google Cloud). Without it audits skip the page
+    # speed step and still finish.
+    pagespeed_api_key: str = ""
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
