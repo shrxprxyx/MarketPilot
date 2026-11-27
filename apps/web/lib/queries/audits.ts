@@ -71,6 +71,21 @@ export function useStartAudit(clientId: string) {
   });
 }
 
+export type Comparison = {
+  previous: { id: string; score: number | null; created_at: string } | null;
+  new: AuditFinding[];
+  fixed: AuditFinding[];
+  unchanged: AuditFinding[];
+};
+
+/** Issues of a finished audit against the audit before it. */
+export function useComparison(auditId: string) {
+  return useQuery({
+    queryKey: ["audit-comparison", auditId],
+    queryFn: () => apiFetch<Comparison>(`/audits/${auditId}/comparison`),
+  });
+}
+
 export function useFindings(auditId: string | undefined, severity: Severity | null) {
   return useQuery({
     queryKey: ["audit-findings", auditId, severity],

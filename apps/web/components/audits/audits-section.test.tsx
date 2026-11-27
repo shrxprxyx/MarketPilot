@@ -35,13 +35,27 @@ const finding = (over = {}) => ({
   ...over,
 });
 
-let list: { data?: { items: unknown[] }; isLoading: boolean; isError: boolean; progress: object } = {
+let list: {
+  data?: { items: unknown[] };
+  isLoading: boolean;
+  isError: boolean;
+  progress: object;
+} = {
   isLoading: false,
   isError: false,
   progress: {},
 };
-let findings: { data?: { items: unknown[] }; isLoading: boolean; isError: boolean } = {
+let findings: {
+  data?: { items: unknown[] };
+  isLoading: boolean;
+  isError: boolean;
+} = {
   data: { items: [finding()] },
+  isLoading: false,
+  isError: false,
+};
+let comparison: { data?: unknown; isLoading: boolean; isError: boolean } = {
+  data: { previous: null, new: [], fixed: [], unchanged: [] },
   isLoading: false,
   isError: false,
 };
@@ -50,7 +64,11 @@ const start = vi.fn();
 vi.mock("@/lib/queries/audits", async (orig) => ({
   ...(await orig<typeof import("@/lib/queries/audits")>()),
   useAudits: () => list,
-  useStartAudit: () => ({ mutateAsync: (...a: unknown[]) => start(...a), isPending: false }),
+  useComparison: () => comparison,
+  useStartAudit: () => ({
+    mutateAsync: (...a: unknown[]) => start(...a),
+    isPending: false,
+  }),
   useFindings: (_id: string, severity: string | null) => {
     severities.push(severity);
     return findings;
@@ -73,6 +91,11 @@ const setAudits = (items: unknown[], progress = {}) => {
 beforeEach(() => {
   setAudits([audit()]);
   findings = { data: { items: [finding()] }, isLoading: false, isError: false };
+  comparison = {
+    data: { previous: null, new: [], fixed: [], unchanged: [] },
+    isLoading: false,
+    isError: false,
+  };
   severities.length = 0;
   start.mockReset();
   useSession.getState().clear();
@@ -162,7 +185,14 @@ describe("starting and failures", () => {
 
   it("shows why the last audit failed instead of a score", () => {
     as("manager");
-    setAudits([audit({ status: "failed", score: null, summary: null, error: "The site is unreachable." })]);
+    setAudits([
+      audit({
+        status: "failed",
+        score: null,
+        summary: null,
+        error: "The site is unreachable.",
+      }),
+    ]);
     render(<AuditsSection clientId="c1" />);
     expect(screen.getByRole("alert")).toHaveTextContent("The site is unreachable.");
     expect(screen.queryByText("/ 100")).not.toBeInTheDocument();
@@ -173,5 +203,127 @@ describe("starting and failures", () => {
     render(<AuditsSection clientId="c1" />);
     expect(screen.getByText("72")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /audit/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("comparison with the previous audit", () => {
+  const previous = { id: "a0", score: 65, created_at: "2026-11-20T10:00:00Z" };
+
+  it("says so for a client's first audit", () => {
+    as("manager");
+    render(<AuditsSection clientId="c1" />);
+    expect(screen.getByText(/first audit for this client/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^New/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the score change and a count for new, fixed and unchanged issues", () => {
+    as("manager");
+    comparison = {
+      data: {
+        previous,
+        new: [finding({ id: "n1", title: "Slow image" })],
+        fixed: [finding({ id: "x1", title: "Broken link" }), finding({ id: "x2", title: "No sitemap" })],
+        unchanged: [],
+      },
+      isLoading: false,
+      isError: false,
+    };
+    render(<AuditsSection clientId="c1" />);
+    expect(screen.getByText(/score 65, \+7/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New (1)" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Fixed (2)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unchanged (0)" })).toBeInTheDocument();
+    expect(screen.getByText("Slow image")).toBeInTheDocument();
+  });
+
+  it("switches the list between new, fixed and unchanged issues", async () => {
+    as("manager");
+    comparison = {
+      data: {
+        previous,
+        new: [finding({ id: "n1", title: "Slow image" })],
+        fixed: [finding({ id: "x1", title: "Broken link" })],
+        unchanged: [],
+      },
+      isLoading: false,
+      isError: false,
+    };
+    render(<AuditsSection clientId="c1" />);
+    await userEvent.click(screen.getByRole("button", { name: "Fixed (1)" }));
+    expect(screen.getByText("Broken link")).toBeInTheDocument();
+    expect(screen.queryByText("Slow image")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Unchanged (0)" }));
+    expect(screen.getByText("No unchanged issues")).toBeInTheDocument();
+  });
+
+  it("says when the comparison could not be loaded", () => {
+    as("manager");
+    comparison = { isLoading: false, isError: true };
+    render(<AuditsSection clientId="c1" />);
+    expect(screen.getByText(/Couldn't compare with the previous audit/)).toBeInTheDocument();
+  });
+});
+
+describe("history", () => {
+  const older = (over = {}) => audit({ id: "a0", score: 65, created_at: "2026-11-20T10:00:00Z", ...over });
+
+  it("is hidden until there is more than one audit", () => {
+    as("manager");
+    render(<AuditsSection clientId="c1" />);
+    expect(screen.queryByRole("navigation", { name: "Audit history" })).not.toBeInTheDocument();
+  });
+
+  it("lists every audit with its score or status and marks the one shown", () => {
+    as("manager");
+    setAudits([audit(), older({ status: "failed", score: null }), older({ id: "a-1", score: 50 })]);
+    render(<AuditsSection clientId="c1" />);
+    const history = screen.getByRole("navigation", { name: "Audit history" });
+    const rows = Array.from(history.querySelectorAll("button"));
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining("Score 72"),
+      expect.stringContaining("Failed"),
+      expect.stringContaining("Score 50"),
+    ]);
+    expect(rows[0]).toHaveAttribute("aria-current", "true");
+    expect(rows[1]).not.toHaveAttribute("aria-current");
+  });
+
+  it("shows an older audit when it is picked", async () => {
+    as("manager");
+    setAudits([audit(), older()]);
+    render(<AuditsSection clientId="c1" />);
+    const history = screen.getByRole("navigation", { name: "Audit history" });
+    await userEvent.click(history.querySelectorAll("button")[1]);
+    expect(screen.getByText("65")).toBeInTheDocument();
+    expect(screen.queryByText("72")).not.toBeInTheDocument();
+  });
+
+  it("shows why a picked audit failed", async () => {
+    as("manager");
+    setAudits([
+      audit(),
+      older({
+        status: "failed",
+        score: null,
+        summary: null,
+        error: "Site down.",
+      }),
+    ]);
+    render(<AuditsSection clientId="c1" />);
+    const history = screen.getByRole("navigation", { name: "Audit history" });
+    await userEvent.click(history.querySelectorAll("button")[1]);
+    expect(screen.getByRole("alert")).toHaveTextContent("Site down.");
+  });
+
+  it("notes when older audits are not shown", () => {
+    as("manager");
+    list = {
+      data: { items: [audit(), older()], next_cursor: "x" } as never,
+      isLoading: false,
+      isError: false,
+      progress: {},
+    };
+    render(<AuditsSection clientId="c1" />);
+    expect(screen.getByText("Showing the latest 2 audits")).toBeInTheDocument();
   });
 });
