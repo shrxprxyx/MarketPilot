@@ -7,8 +7,9 @@ Google fetches the pages itself, so nothing here reaches a client's site. Withou
 step is skipped; a failed call is recorded on its row and never fails the audit.
 """
 import logging
+import re
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import httpx
@@ -47,7 +48,10 @@ _MOBILE_AUDITS: dict[str, tuple[str, str, str, str]] = {
         "lh_no_viewport",
         "high",
         "No mobile viewport tag",
-        "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> to the <head>.",
+        (
+            "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            " to the <head>."
+        ),
     ),
     "tap-targets": (
         "lh_tap_targets",
@@ -149,8 +153,7 @@ def mobile_findings_from_response(url: str, body: dict[str, Any]) -> list[Findin
         # Build a human-readable detail from the Lighthouse display value when available
         display = audit.get("displayValue") or ""
         description = audit.get("description") or ""
-        # Strip markdown links from description (e.g. [Learn more](https://...)
-        import re
+        # Strip markdown links from description (e.g. [Learn more](https://...))
         description = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", description)
         detail = display if display else description[:200] if description else title
 
@@ -179,11 +182,7 @@ async def _run_one(
     """Returns (PageSpeedResult, raw_body). raw_body is {} on error."""
     # For mobile we request performance + best-practices to get mobile-friendliness audits.
     categories = ["performance", "best-practices"] if strategy == "mobile" else ["performance"]
-    params: dict[str, Any] = {
-        "url": url,
-        "strategy": strategy,
-        "key": api_key,
-    }
+    params: dict[str, Any] = {"url": url, "strategy": strategy, "key": api_key}
     # httpx serialises list params correctly when passed as a list of tuples
     param_list = [(k, v) for k, v in params.items()]
     for cat in categories:
@@ -209,7 +208,10 @@ async def _run_one(
         body = resp.json()
         return _parse(url, strategy, body), body
     except ValueError:
-        return PageSpeedResult(url, strategy, error="PageSpeed Insights sent an unreadable answer."), {}
+        return (
+            PageSpeedResult(url, strategy, error="PageSpeed Insights sent an unreadable answer."),
+            {},
+        )
 
 
 async def collect_pagespeed(
@@ -228,7 +230,11 @@ async def collect_pagespeed(
     """
     if not api_key:
         return (
-            {"status": "skipped", "reason": "No PageSpeed Insights API key is configured.", "results": []},
+            {
+                "status": "skipped",
+                "reason": "No PageSpeed Insights API key is configured.",
+                "results": [],
+            },
             [],
         )
 
@@ -247,10 +253,7 @@ async def collect_pagespeed(
             results.append(result)
             # Extract mobile-friendliness findings from the mobile run only
             if strategy == "mobile" and body:
-                found = mobile_findings_from_response(url, body)
-                # De-duplicate by code: same issue on multiple pages becomes separate findings
-                # (each has a different url so they are stored and displayed individually).
-                mobile_findings.extend(found)
+                mobile_findings.extend(mobile_findings_from_response(url, body))
 
-    summary = {"status": "done", "results": [asdict(r) for r in results]}
+    summary: dict[str, Any] = {"status": "done", "results": [asdict(r) for r in results]}
     return summary, mobile_findings
