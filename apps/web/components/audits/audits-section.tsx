@@ -407,7 +407,7 @@ function History({
               type="button"
               aria-current={a.id === shownId ? "true" : undefined}
               onClick={() => onSelect(a.id)}
-              className="flex w-full cursor-pointer items-center justify-between gap-4 px-1 py-3 text-left text-sm hover:bg-muted/50 aria-[current=true]:bg-muted"
+              className="flex w-full cursor-pointer items-center justify-between gap-4 px-1 py-3 text-left text-sm hover:bg-muted/50 aria-current:bg-muted"
             >
               <span>{when(a.created_at)}</span>
               <span className="text-muted-foreground">

@@ -1,5 +1,6 @@
 """Runs one website audit as a background job: crawl, check, score, store (FR-AUD-01, 06),
-reporting progress to its job row so the UI can follow it over SSE (SRS §3.5)."""
+reporting progress to its job row so the UI can follow it over SSE (SRS §3.5).
+"""
 import logging
 from collections import Counter
 from datetime import datetime, timezone
@@ -19,8 +20,8 @@ from app.jobs.progress import is_cancelled, job_status, update_job
 from app.models.audit import Audit, AuditFinding
 
 logger = logging.getLogger(__name__)
-CRAWL_SHARE = (5, 85)  # progress range used up by the crawl itself
-PAGESPEED_SHARE = (85, 90)  # and by the PageSpeed Insights calls
+CRAWL_SHARE = (5, 85)
+PAGESPEED_SHARE = (85, 90)
 
 
 def _summary(
@@ -95,10 +96,10 @@ async def run_audit(
         )
         return
     url = audit.url
-    await db.rollback()  # no transaction is held open while the site is being crawled
+    await db.rollback()  # no transaction held open while the site is being crawled
 
     state = await job_status(db, tenant_id, job_id)
-    if state in ("succeeded", "failed"):  # a duplicate delivery of finished work
+    if state in ("succeeded", "failed"):
         return
     if state == "cancelled":
         await _set_audit(
@@ -106,13 +107,15 @@ async def run_audit(
             error="Cancelled before it started.",
         )
         return
+
     await update_job(db, tenant_id, job_id, status="running", progress=5, message="Starting")
     await _set_audit(db, tenant_id, audit_id, status="running", started_at=_now())
 
     async def progress(done: int, total: int, message: str) -> None:
         low, high = CRAWL_SHARE
         await update_job(
-            db, tenant_id, job_id, progress=low + int((high - low) * done / max(total, 1)),
+            db, tenant_id, job_id,
+            progress=low + int((high - low) * done / max(total, 1)),
             message=message,
         )
 
@@ -133,41 +136,65 @@ async def run_audit(
         async def speed_progress(done: int, total: int) -> None:
             low, high = PAGESPEED_SHARE
             await update_job(
-                db, tenant_id, job_id, progress=low + int((high - low) * done / max(total, 1)),
+                db, tenant_id, job_id,
+                progress=low + int((high - low) * done / max(total, 1)),
                 message=f"Measuring page speed ({done + 1} of {total})",
             )
 
-        pagespeed = await collect_pagespeed(
-            result, settings.pagespeed_api_key, on_progress=speed_progress,
+        # collect_pagespeed now also returns mobile-friendliness findings (FR-AUD-05)
+        pagespeed, mobile_findings = await collect_pagespeed(
+            result, settings.pagespeed_api_key,
+            on_progress=speed_progress,
             should_stop=should_stop,
         )
+
         if await should_stop():
             await _set_audit(
                 db, tenant_id, audit_id, status="cancelled", finished_at=_now(),
                 error="Cancelled.",
             )
             return
+
         await update_job(db, tenant_id, job_id, progress=90, message="Scoring")
-        findings = run_checks(result)
+
+        # Merge crawl findings with Lighthouse mobile-friendliness findings before scoring
+        crawl_findings = run_checks(result)
+        findings = crawl_findings + mobile_findings
+
         score, categories = score_audit(findings, len(result.pages))
         await set_rls_context(db, tenant_id=tenant_id)
         db.add_all(
             AuditFinding(
-                tenant_id=tenant_id, audit_id=audit_id, code=f.code, category=f.category,
-                severity=f.severity, title=f.title, detail=f.detail, url=f.url,
-                recommendation=f.recommendation, metric=f.metric,
+                tenant_id=tenant_id,
+                audit_id=audit_id,
+                code=f.code,
+                category=f.category,
+                severity=f.severity,
+                title=f.title,
+                detail=f.detail,
+                url=f.url,
+                recommendation=f.recommendation,
+                metric=f.metric,
             )
             for f in findings
         )
         if not await _set_audit(
-            db, tenant_id, audit_id, status="succeeded", score=score, finished_at=_now(),
-            summary=_summary(result, findings, categories, pagespeed), raw=_raw(result),
+            db, tenant_id, audit_id,
+            status="succeeded",
+            score=score,
+            finished_at=_now(),
+            summary=_summary(result, findings, categories, pagespeed),
+            raw=_raw(result),
         ):
             return
+
         await update_job(
-            db, tenant_id, job_id, status="succeeded", message="Audit complete",
+            db, tenant_id, job_id,
+            status="succeeded",
+            message="Audit complete",
             result_ref={"audit_id": str(audit_id), "score": score, "findings": len(findings)},
         )
+
     except Exception:
         logger.exception("Audit failed", extra={"audit_id": str(audit_id)})
         await db.rollback()
@@ -176,7 +203,8 @@ async def run_audit(
             error="The audit failed unexpectedly. Try running it again.",
         )
         await update_job(
-            db, tenant_id, job_id, status="failed", error="The audit failed.",
+            db, tenant_id, job_id, status="failed",
+            error="The audit failed.",
             message="Audit failed",
         )
     finally:
