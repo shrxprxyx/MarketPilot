@@ -1,5 +1,6 @@
 """PageSpeed Insights step (FR-AUD-04). Google is a MockTransport, so nothing touches the
-network; the crawl behind it is the same mock site the engine tests use."""
+network; the crawl behind it is the same mock site the engine tests use.
+"""
 import json
 from typing import Any
 
@@ -62,7 +63,7 @@ async def test_it_measures_the_home_page_and_the_five_most_linked_pages() -> Non
 
 async def test_it_reads_the_score_and_core_web_vitals_for_both_strategies() -> None:
     transport, seen = _google()
-    out = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
+    out, _ = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
     assert out["status"] == "done"
     assert len(out["results"]) == 6 * len(STRATEGIES)
     first = out["results"][0]
@@ -77,11 +78,12 @@ async def test_it_reads_the_score_and_core_web_vitals_for_both_strategies() -> N
 
 async def test_without_a_key_the_step_is_skipped_and_nothing_is_requested() -> None:
     transport, seen = _google()
-    out = await collect_pagespeed(await _crawl(), "", transport=transport)
+    out, findings = await collect_pagespeed(await _crawl(), "", transport=transport)
     assert out["status"] == "skipped"
     assert out["results"] == []
     assert out["reason"]
     assert seen == []
+    assert findings == []
 
 
 async def test_a_failed_call_is_recorded_on_its_row_and_the_rest_continue() -> None:
@@ -100,7 +102,7 @@ async def test_a_failed_call_is_recorded_on_its_row_and_the_rest_continue() -> N
         return httpx.Response(200, json=_lighthouse(score=0.5))
 
     transport, _ = _google(handler)
-    out = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
+    out, _ = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
     by_page = {
         (r["url"].removeprefix("https://acme.test"), r["strategy"]): r for r in out["results"]
     }
@@ -109,14 +111,14 @@ async def test_a_failed_call_is_recorded_on_its_row_and_the_rest_continue() -> N
     assert "timed out" in by_page[("/a", "mobile")]["error"]
     assert "unreadable" in by_page[("/b", "mobile")]["error"]
     assert "HTTP 500" in by_page[("/e", "mobile")]["error"]
-    assert by_page[("/e", "desktop")]["score"] == 50  # the same page's other strategy still ran
+    assert by_page[("/e", "desktop")]["score"] == 50
     assert by_page[("/", "mobile")]["score"] == 50
     assert SECRET not in json.dumps(out)
 
 
 async def test_a_result_without_lighthouse_data_has_empty_numbers_not_an_error() -> None:
     transport, _ = _google(lambda _r: httpx.Response(200, json={}))
-    out = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
+    out, _ = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
     assert out["results"][0]["score"] is None
     assert out["results"][0]["error"] is None
 
@@ -133,7 +135,7 @@ async def test_it_reports_progress_and_stops_when_asked() -> None:
     async def should_stop() -> bool:
         return len(seen) >= stop_after
 
-    out = await collect_pagespeed(
+    out, _ = await collect_pagespeed(
         await _crawl(), SECRET, transport=transport, on_progress=on_progress,
         should_stop=should_stop,
     )
