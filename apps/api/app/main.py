@@ -20,6 +20,7 @@ from app.api.v1 import (
     me,
     members,
     ready,
+    social,
     strategies,
     tenant,
 )
@@ -61,6 +62,7 @@ app.include_router(clients.router, prefix="/api/v1")
 app.include_router(members.router, prefix="/api/v1")
 app.include_router(audit.router, prefix="/api/v1")
 app.include_router(audits.router, prefix="/api/v1")
+app.include_router(social.router, prefix="/api/v1")
 app.include_router(ai_budget.router, prefix="/api/v1")
 app.include_router(ai_connections.router, prefix="/api/v1")
 app.include_router(ai_routes.router, prefix="/api/v1")

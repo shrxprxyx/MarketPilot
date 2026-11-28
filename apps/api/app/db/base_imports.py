@@ -14,6 +14,7 @@ from app.models.job import Job  # noqa: F401
 from app.models.membership import Membership  # noqa: F401
 from app.models.model_pricing import ModelPricing  # noqa: F401
 from app.models.refresh_token import RefreshToken  # noqa: F401
+from app.models.social import SocialAccount, SocialDaily, SocialPost  # noqa: F401
 from app.models.strategy import Strategy  # noqa: F401
 from app.models.task_model_route import TaskModelRoute  # noqa: F401
 from app.models.tenant import Tenant  # noqa: F401
