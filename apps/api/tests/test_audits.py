@@ -18,11 +18,10 @@ from app.audit.runner import run_audit
 from app.auth.jwt import create_access_token
 from app.auth.password import hash_password
 from app.db.rls import set_rls_context
-from app.jobs.progress import update_job
 from app.main import app
 from app.models.membership import Membership
 from app.models.user import User
-from tests.test_audit_engine import CLEAN_SITE, allow_all, home, site
+from tests.test_audit_engine import allow_all, home, site
 
 client = TestClient(app, raise_server_exceptions=False)
 
