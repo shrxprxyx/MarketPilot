@@ -2,8 +2,9 @@
 hand-off is captured, so the runner is executed explicitly and nothing touches the network.
 """
 import asyncio
+from types import SimpleNamespace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -339,3 +340,55 @@ def test_a_run_with_a_key_stores_pagespeed_results_and_mobile_findings(
         params={"category": "mobile"}, headers=_auth(admin_token),
     ).json()["items"]
     assert [f["code"] for f in mobile] == ["lh_font_size"]
+
+
+def _status(token: str, audit_id: str) -> str:
+    return str(client.get(f"/api/v1/audits/{audit_id}", headers=_auth(token)).json()["status"])
+
+
+def test_a_crawl_that_was_cancelled_marks_the_audit_cancelled(
+    admin_token: str, cid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def cancelled_crawl(*_: Any, **__: Any) -> Any:
+        return SimpleNamespace(cancelled=True)
+
+    monkeypatch.setattr(runner, "crawl", cancelled_crawl)
+    started = _start(admin_token, cid).json()
+    _run_queued()
+    assert _status(admin_token, started["id"]) == "cancelled"
+
+
+def test_cancelling_during_the_pagespeed_step_stops_before_scoring(
+    admin_token: str, cid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stop = {"now": False}
+
+    async def fake_speed(_crawl: Any, _key: str, *, on_progress: Any, **__: Any) -> Any:
+        await on_progress(0, 2)  # the runner's progress callback
+        stop["now"] = True
+        return {"status": "done", "results": []}, []
+
+    async def is_cancelled(*_: Any) -> bool:
+        return stop["now"]
+
+    monkeypatch.setattr(runner, "collect_pagespeed", fake_speed)
+    monkeypatch.setattr(runner, "is_cancelled", is_cancelled)
+    started = _start(admin_token, cid).json()
+    _run_queued()
+    assert _status(admin_token, started["id"]) == "cancelled"
+    findings = client.get(f"/api/v1/audits/{started['id']}/findings", headers=_auth(admin_token))
+    assert findings.json()["items"] == []
+
+
+def test_an_audit_that_no_longer_exists_cancels_its_job(
+    admin_token: str, cid: str, tenant_id: UUID
+) -> None:
+    started = _start(admin_token, cid).json()
+    _queued.clear()
+
+    async def go() -> None:
+        async with db_engine.AsyncSessionLocal() as session:
+            await run_audit(session, tenant_id, uuid4(), UUID(started["job_id"]))
+
+    asyncio.run(go())
+    assert _job(admin_token, started["job_id"])["status"] == "cancelled"
