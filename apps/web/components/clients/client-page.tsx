@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { AuditsSection } from "@/components/audits/audits-section";
+import { SocialSection } from "@/components/social/social-section";
 import { BrandProfileForm } from "@/components/clients/brand-profile-form";
 import { ClientOverview } from "@/components/clients/client-overview";
 import { KnowledgeSection } from "@/components/knowledge/knowledge-section";
@@ -68,6 +69,7 @@ export function ClientPage({ id }: { id: string }) {
           <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
           <TabsTrigger value="strategy">Strategy</TabsTrigger>
           <TabsTrigger value="audits">Audits</TabsTrigger>
+          <TabsTrigger value="social">Social</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="pt-6">
           <ClientOverview client={client} />
@@ -84,6 +86,9 @@ export function ClientPage({ id }: { id: string }) {
         </TabsContent>
         <TabsContent value="audits" className="pt-6">
           <AuditsSection clientId={client.id} />
+        </TabsContent>
+        <TabsContent value="social" className="pt-6">
+          <SocialSection clientId={client.id} />
         </TabsContent>
       </Tabs>
     </div>

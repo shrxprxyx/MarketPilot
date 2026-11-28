@@ -66,6 +66,7 @@ describe("ClientPage", () => {
       "Knowledge",
       "Strategy",
       "Audits",
+      "Social",
     ]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("overview-panel Acme Pets")).toBeInTheDocument();
