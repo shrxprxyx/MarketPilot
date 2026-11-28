@@ -7,6 +7,20 @@ export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 
 export type AuditStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
+export type PageSpeedResult = {
+  url: string;
+  strategy: "mobile" | "desktop";
+  score: number | null;
+  lcp_ms: number | null;
+  cls: number | null;
+  tbt_ms: number | null;
+  error: string | null;
+};
+
+export type PageSpeedSummary =
+  | { status: "skipped"; reason: string; results: [] }
+  | { status: "done"; results: PageSpeedResult[] };
+
 export type Audit = {
   id: string;
   client_id: string;
@@ -19,11 +33,12 @@ export type Audit = {
     severity_counts?: Partial<Record<Severity, number>>;
     pages_crawled?: number;
     truncated?: boolean;
+    pagespeed?: PageSpeedSummary;
   } | null;
   error: string | null;
   created_at: string;
   finished_at: string | null;
-  job_id?: string | null; // the crawl job, while one is queued or running
+  job_id?: string | null;
 };
 
 export type AuditFinding = {
@@ -39,16 +54,19 @@ export type AuditFinding = {
 
 export const POLL_MS = 3000;
 
-export const isActive = (a: Pick<Audit, "status">) => a.status === "queued" || a.status === "running";
+export const isActive = (a: Pick<Audit, "status">) =>
+  a.status === "queued" || a.status === "running";
 
 export function useAudits(clientId: string) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["audits", clientId],
     queryFn: () =>
-      apiFetch<{ items: Audit[]; next_cursor: string | null }>(`/clients/${clientId}/audits?limit=20`),
-    // The stream reports progress; polling is what notices the audit finishing if it drops.
-    refetchInterval: (q) => (q.state.data?.items.some(isActive) ? POLL_MS : false),
+      apiFetch<{ items: Audit[]; next_cursor: string | null }>(
+        `/clients/${clientId}/audits?limit=20`,
+      ),
+    refetchInterval: (q) =>
+      q.state.data?.items.some(isActive) ? POLL_MS : false,
   });
 
   const running = query.data?.items.find((a) => isActive(a) && a.job_id);
@@ -78,7 +96,6 @@ export type Comparison = {
   unchanged: AuditFinding[];
 };
 
-/** Issues of a finished audit against the audit before it. */
 export function useComparison(auditId: string) {
   return useQuery({
     queryKey: ["audit-comparison", auditId],
