@@ -236,3 +236,106 @@ def test_a_run_stores_a_score_and_sorted_findings(admin_token: str, cid: str) ->
     audit = client.get(f"/api/v1/audits/{started['id']}", headers=_auth(admin_token)).json()
     assert audit["status"] == "succeeded"
     assert 0 <= audit["score"]
+
+def test_findings_can_be_filtered_by_severity_and_category(admin_token: str, cid: str) -> None:
+    audit_id = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    url = f"/api/v1/audits/{audit_id}/findings"
+    everything = client.get(url, headers=_auth(admin_token)).json()["items"]
+    assert everything
+    sev = everything[0]["severity"]
+    only_sev = client.get(url, params={"severity": sev}, headers=_auth(admin_token)).json()["items"]
+    assert only_sev and {f["severity"] for f in only_sev} == {sev}
+    only_cat = client.get(
+        url, params={"category": "mobile"}, headers=_auth(admin_token)
+    ).json()["items"]
+    assert all(f["category"] == "mobile" for f in only_cat)
+
+
+def test_comparison_needs_a_finished_audit_and_diffs_against_the_previous(
+    admin_token: str, cid: str
+) -> None:
+    first = _start(admin_token, cid).json()["id"]
+    cmp_url = "/api/v1/audits/{}/comparison"
+    # still queued: cannot be compared
+    assert client.get(cmp_url.format(first), headers=_auth(admin_token)).status_code == 409
+    _run_queued()
+    r = client.get(cmp_url.format(first), headers=_auth(admin_token)).json()
+    assert r["previous"] is None and r["new"] == [] and r["fixed"] == []
+
+    _routes["site"] = {"/": home()}  # the broken link is fixed
+    second = _start(admin_token, cid).json()["id"]
+    _run_queued()
+    r = client.get(cmp_url.format(second), headers=_auth(admin_token)).json()
+    assert r["previous"]["id"] == first
+    assert any(f["code"] for f in r["fixed"])
+
+
+def test_the_audit_list_pages_with_a_cursor_and_rejects_a_bad_one(
+    admin_token: str, cid: str
+) -> None:
+    ids = []
+    for _ in range(2):
+        ids.append(_start(admin_token, cid).json()["id"])
+        _run_queued()
+    url = f"/api/v1/clients/{cid}/audits"
+    page1 = client.get(url, params={"limit": 1}, headers=_auth(admin_token)).json()
+    assert [a["id"] for a in page1["items"]] == [ids[1]]
+    assert page1["next_cursor"]
+    page2 = client.get(
+        url, params={"limit": 1, "cursor": page1["next_cursor"]}, headers=_auth(admin_token)
+    ).json()
+    assert [a["id"] for a in page2["items"]] == [ids[0]]
+    bad = client.get(url, params={"cursor": "nope"}, headers=_auth(admin_token))
+    assert bad.status_code == 400
+
+
+def test_an_audit_cancelled_before_it_starts_is_marked_cancelled(
+    admin_token: str, cid: str
+) -> None:
+    started = _start(admin_token, cid).json()
+    r = client.delete(f"/api/v1/jobs/{started['job_id']}", headers=_auth(admin_token))
+    assert r.status_code == 200
+    _run_queued()
+    audit = client.get(f"/api/v1/audits/{started['id']}", headers=_auth(admin_token)).json()
+    assert audit["status"] == "cancelled"
+
+
+def test_an_unexpected_crash_fails_the_audit_and_its_job(
+    admin_token: str, cid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("crawler exploded")
+
+    monkeypatch.setattr(runner, "crawl", boom)
+    started = _start(admin_token, cid).json()
+    _run_queued()
+    audit = client.get(f"/api/v1/audits/{started['id']}", headers=_auth(admin_token)).json()
+    assert audit["status"] == "failed"
+    assert _job(admin_token, started["job_id"])["status"] == "failed"
+
+
+def test_a_run_with_a_key_stores_pagespeed_results_and_mobile_findings(
+    admin_token: str, cid: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake(crawl_result: Any, key: str, **_: Any) -> Any:
+        from app.audit.checks import Finding
+
+        return (
+            {"status": "done", "results": []},
+            [Finding(code="lh_font_size", category="mobile", severity="medium",
+                     title="Text is too small", detail="d", recommendation="r",
+                     url=crawl_result.start_url)],
+        )
+
+    monkeypatch.setattr(runner, "collect_pagespeed", fake)
+    started = _start(admin_token, cid).json()
+    _run_queued()
+    audit = client.get(f"/api/v1/audits/{started['id']}", headers=_auth(admin_token)).json()
+    assert audit["status"] == "succeeded"
+    assert audit["summary"]["pagespeed"]["status"] == "done"
+    mobile = client.get(
+        f"/api/v1/audits/{started['id']}/findings",
+        params={"category": "mobile"}, headers=_auth(admin_token),
+    ).json()["items"]
+    assert [f["code"] for f in mobile] == ["lh_font_size"]

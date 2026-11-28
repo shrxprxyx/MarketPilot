@@ -7,7 +7,12 @@ from typing import Any
 import httpx
 
 from app.audit.crawler import CrawlResult, crawl
-from app.audit.pagespeed import STRATEGIES, collect_pagespeed, pick_pages
+from app.audit.pagespeed import (
+    STRATEGIES,
+    collect_pagespeed,
+    mobile_findings_from_response,
+    pick_pages,
+)
 from tests.test_audit_engine import allow_all, fetcher, home
 
 SECRET = "k-secret-123"
@@ -141,3 +146,33 @@ async def test_it_reports_progress_and_stops_when_asked() -> None:
     )
     assert len(out["results"]) == stop_after
     assert progress == [(0, 12), (1, 12), (2, 12)]
+
+def _with_audits(**audits: Any) -> dict[str, Any]:
+    body = _lighthouse()
+    body["lighthouseResult"]["audits"].update(audits)
+    return body
+
+
+def test_failing_lighthouse_audits_become_mobile_findings_and_passing_ones_do_not() -> None:
+    body = _with_audits(**{
+        "tap-targets": {"score": 0.2, "displayValue": "3 targets too small"},
+        "font-size": {"score": 0.95},  # passes
+        "content-width": {"score": None},  # informational
+        "meta-viewport": {"score": -1},  # not applicable
+        "image-aspect-ratio": {"score": 0.0, "description": "Bad [Learn more](https://x.y)."},
+    })
+    found = mobile_findings_from_response("https://acme.test/", body)
+    by_code = {f.code: f for f in found}
+    assert set(by_code) == {"lh_tap_targets", "lh_image_aspect_ratio"}
+    assert by_code["lh_tap_targets"].detail == "3 targets too small"
+    assert by_code["lh_tap_targets"].metric == {"lighthouse_score": 20}
+    assert by_code["lh_image_aspect_ratio"].detail == "Bad Learn more."
+    assert all(f.category == "mobile" and f.url == "https://acme.test/" for f in found)
+
+
+async def test_only_the_mobile_run_contributes_mobile_findings() -> None:
+    body = _with_audits(**{"font-size": {"score": 0.1}})
+    transport, _ = _google(lambda _r: httpx.Response(200, json=body))
+    _, findings = await collect_pagespeed(await _crawl(), SECRET, transport=transport)
+    assert findings and {f.code for f in findings} == {"lh_font_size"}
+    assert len(findings) == 6  # one per measured page, none from desktop runs
